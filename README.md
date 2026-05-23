@@ -9,10 +9,13 @@
 
 | Métrica | Valor |
 |---------|-------|
-| **Fase** | MVP construido — listo para piloto con número real |
-| **Tests** | **104 / 104 ✅** |
+| **Fase** | **En producción** — systemd activo, listo para conectar número WA |
+| **Tests** | **109 / 109 ✅** |
 | **Typecheck** | 0 errores |
 | **Último commit** | 2026-05-23 |
+| **Servicio** | `salones-wa` (systemd, usuario dedicado, bind `127.0.0.1:8085`) |
+| **URL pública (nip.io)** | `https://salones.187.77.25.101.nip.io` |
+| **Admin panel** | `https://salones.187.77.25.101.nip.io/admin?token=salones-admin-2026` |
 
 ---
 
@@ -91,16 +94,16 @@ salones-wa/
 │   │   └── schema.ts               # DDL SQLite — 6 tablas + índices
 │   ├── web/
 │   │   ├── panel.ts                # /panel/* — dashboard, contactos, campañas (auth: salon token)
-│   │   └── admin.ts                # /admin/* — CRUD salones + servicios (auth: ADMIN_TOKEN)
+│   │   ├── admin.ts                # /admin/* — CRUD salones + servicios (auth: ADMIN_TOKEN)
+│   │   └── admin.test.ts           # 18 tests (incluye pins P0-1)
 │   └── index.ts                    # Entry point + graceful shutdown
 ├── tests/
-│   ├── intent-parser.test.ts       # 26 tests
-│   ├── models.test.ts              # 32 tests
+│   ├── intent-parser.test.ts       # 28 tests
+│   ├── models.test.ts              # 33 tests  (includes P0-2 idempotence pin)
 │   ├── message-handler.test.ts     # 15 tests
 │   ├── conversation-state.test.ts  # 6 tests
 │   └── web-panel.test.ts           # 9 tests
-├── src/web/
-│   └── admin.test.ts               # 16 tests
+│                                   # (admin.test.ts colocado en src/web/)
 ├── docs/
 │   ├── MVP-PLAN.md                 # Plan completo del MVP
 │   ├── SCHEMA.md                   # Schema SQLite documentado
@@ -269,8 +272,9 @@ ROI para la dueña:         5x-10x en valor recuperado vs precio
 | Semana | Focus | Estado |
 |--------|-------|--------|
 | **1-2** | Bot core + anti-cancel + reactivación | ✅ **COMPLETO** — 88 tests |
-| **2b** | Admin UI — alta/baja salones, servicios | ✅ **COMPLETO** — 104 tests |
-| **3** | Piloto real: conectar número WA, primer salón | 🔜 Siguiente |
+| **2b** | Admin UI — alta/baja salones, servicios | ✅ **COMPLETO** — 109 tests |
+| **2c** | Hardening seguridad + systemd + deploy en VPS | ✅ **COMPLETO** — en producción 2026-05-23 |
+| **3** | Piloto real: conectar número WA, primer salón | 🔜 **SIGUIENTE** — admin panel listo |
 | **4** | Panel web refinado (feedback de uso real) | ⏳ Pendiente |
 | **5** | Multi-tenant (2+ salones en paralelo) | ⏳ Pendiente |
 | **6+** | Cold outreach Iztapalapa, primer pago | ⏳ Pendiente |
@@ -335,9 +339,27 @@ ADMIN_TOKEN=admin123 BIND_HOST=0.0.0.0 npm run dev
 
 ## Deployment (producción)
 
-El servicio se enlaza a `127.0.0.1:8085` por default. Para exposición pública, usar Caddy como reverse proxy.
+### Estado actual — **EN PRODUCCIÓN** (2026-05-23)
 
-### Exponer vía Caddy
+El servicio está instalado como systemd unit y corriendo en el VPS:
+
+```bash
+systemctl status salones-wa   # → active (running)
+curl https://salones.187.77.25.101.nip.io/health  # → {"ok":true}
+```
+
+| Recurso | URL |
+|---------|-----|
+| Health check | `https://salones.187.77.25.101.nip.io/health` |
+| Admin panel | `https://salones.187.77.25.101.nip.io/admin?token=salones-admin-2026` |
+
+**Próximo paso:** crear primer salón en el admin panel → escanear QR con número WA piloto.
+
+---
+
+El servicio se enlaza a `127.0.0.1:8085` por default. Expuesto públicamente vía Caddy con nip.io (wildcard TLS automático, sin configurar DNS propio).
+
+### Exponer vía Caddy (dominio propio)
 
 **Prerequisito:** DNS `salones.mycommit.net` apuntando a la IP del VPS.
 
@@ -350,7 +372,7 @@ salones.mycommit.net {
 
 Para acceso temporal sin DNS: `BIND_HOST=0.0.0.0` en `.env` (NO recomendado para producción permanente).
 
-### Systemd unit
+### Systemd unit (ya instalado en `/etc/systemd/system/salones-wa.service`)
 
 ```ini
 [Unit]
@@ -375,26 +397,18 @@ Group=salones-wa
 WantedBy=multi-user.target
 ```
 
-### C4 — Usuario dedicado (runbook para operador)
-
-Ejecutar una sola vez antes de levantar con systemd:
+### C4 — Usuario dedicado (ya ejecutado en 2026-05-23)
 
 ```bash
-# 1. Crear usuario sin shell ni home público
+# Completado — usuario salones-wa (uid=997) existe
+# data/ ownership: salones-wa:salones-wa
+# Permisos: DB→600, sessions/→700, .env→600
+
+# Para reinstalar desde cero en otro VPS:
 useradd -r -s /bin/false -d /root/claude/projects/salones-wa salones-wa
-
-# 2. Dar ownership del directorio de datos
 chown -R salones-wa:salones-wa /root/claude/projects/salones-wa/data/
-
-# 3. Instalar el unit file
-cp /path/to/salones-wa.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable salones-wa
-systemctl start salones-wa
-
-# 4. Verificar
-systemctl status salones-wa
-journalctl -u salones-wa -f --since "1 min ago"
+cp salones-wa.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now salones-wa
 ```
 
 ---

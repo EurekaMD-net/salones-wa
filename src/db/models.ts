@@ -81,6 +81,54 @@ export function getAllActiveSalons(db: Database.Database): Salon[] {
   return db.prepare('SELECT * FROM salons WHERE active = 1').all() as Salon[]
 }
 
+export function getAllSalons(db: Database.Database): Salon[] {
+  return db.prepare('SELECT * FROM salons ORDER BY created_at DESC').all() as Salon[]
+}
+
+export function getSalonById(db: Database.Database, id: string): Salon | null {
+  return (db.prepare('SELECT * FROM salons WHERE id = ?').get(id) as Salon) ?? null
+}
+
+export function updateSalon(
+  db: Database.Database,
+  id: string,
+  data: { name?: string; phone?: string }
+): Salon | null {
+  if (data.name !== undefined) {
+    db.prepare('UPDATE salons SET name = ? WHERE id = ?').run(data.name, id)
+  }
+  if (data.phone !== undefined) {
+    db.prepare('UPDATE salons SET phone = ? WHERE id = ?').run(data.phone, id)
+  }
+  return getSalonById(db, id)
+}
+
+export function setSalonActive(db: Database.Database, id: string, active: boolean): void {
+  db.prepare('UPDATE salons SET active = ? WHERE id = ?').run(active ? 1 : 0, id)
+}
+
+export function createService(
+  db: Database.Database,
+  data: { salon_id: string; name: string; duration_min: number; price?: number }
+): Service {
+  return addService(db, data)
+}
+
+export function updateService(
+  db: Database.Database,
+  id: string,
+  data: { name?: string; duration_min?: number; price?: number | null }
+): Service | null {
+  if (data.name !== undefined) db.prepare('UPDATE services SET name = ? WHERE id = ?').run(data.name, id)
+  if (data.duration_min !== undefined) db.prepare('UPDATE services SET duration_min = ? WHERE id = ?').run(data.duration_min, id)
+  if (data.price !== undefined) db.prepare('UPDATE services SET price = ? WHERE id = ?').run(data.price, id)
+  return (db.prepare('SELECT * FROM services WHERE id = ?').get(id) as Service) ?? null
+}
+
+export function deleteService(db: Database.Database, id: string): void {
+  db.prepare('UPDATE services SET active = 0 WHERE id = ?').run(id)
+}
+
 // ─── Services ────────────────────────────────────────────────────────────────
 
 export function addService(

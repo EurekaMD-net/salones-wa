@@ -7,6 +7,7 @@ import { serve } from '@hono/node-server'
 import { getDb } from './db/database.js'
 import { getAllActiveSalons } from './db/models.js'
 import { createWebPanel } from './web/panel.js'
+import { createAdminPanel } from './web/admin.js'
 import { registerCrons } from './crons/index.js'
 import { initBaileysForSalon, getInstance } from './bot/baileys-manager.js'
 
@@ -21,10 +22,13 @@ async function main() {
   const db = getDb(DB_PATH)
   console.log('[salones-wa] DB ready')
 
-  // ─── Web panel (Hono) ────────────────────────────────────────────────
+  // ─── Web panel + Admin (Hono) ────────────────────────────────────────
   const app = createWebPanel(db)
+  const adminApp = createAdminPanel(db)
+  app.route('/', adminApp)
   serve({ fetch: app.fetch, port: PORT }, () => {
     console.log(`[salones-wa] web panel listening on :${PORT}`)
+    console.log(`[salones-wa] admin panel at /admin?token=${process.env['ADMIN_TOKEN'] ?? 'changeme'}`)
   })
 
   // ─── Crons ───────────────────────────────────────────────────────────

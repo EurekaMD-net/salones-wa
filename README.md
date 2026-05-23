@@ -10,7 +10,7 @@
 | Métrica | Valor |
 |---------|-------|
 | **Fase** | MVP construido — listo para piloto con número real |
-| **Tests** | **88 / 88 ✅** |
+| **Tests** | **104 / 104 ✅** |
 | **Typecheck** | 0 errores |
 | **Último commit** | 2026-05-23 |
 
@@ -51,7 +51,8 @@ Clientas (inbound)  ─────► Baileys (Node.js, mismo VPS)
                   └───────────────┼───────────────┘
                                   ▼
                            Web Panel (Hono @ :8085)
-                        Agenda · Contactos · Campañas
+                     /panel/* — Agenda · Contactos · Campañas
+                     /admin/* — Alta/baja salones · Servicios
 ```
 
 ---
@@ -89,7 +90,8 @@ salones-wa/
 │   │   ├── models.ts               # Queries tipadas — salons, services, contacts, appointments, campaigns
 │   │   └── schema.ts               # DDL SQLite — 6 tablas + índices
 │   ├── web/
-│   │   └── panel.ts                # Hono panel :8085 — dashboard, contactos, campañas, API stats
+│   │   ├── panel.ts                # /panel/* — dashboard, contactos, campañas (auth: salon token)
+│   │   └── admin.ts                # /admin/* — CRUD salones + servicios (auth: ADMIN_TOKEN)
 │   └── index.ts                    # Entry point + graceful shutdown
 ├── tests/
 │   ├── intent-parser.test.ts       # 26 tests
@@ -97,6 +99,8 @@ salones-wa/
 │   ├── message-handler.test.ts     # 15 tests
 │   ├── conversation-state.test.ts  # 6 tests
 │   └── web-panel.test.ts           # 9 tests
+├── src/web/
+│   └── admin.test.ts               # 16 tests
 ├── docs/
 │   ├── MVP-PLAN.md                 # Plan completo del MVP
 │   ├── SCHEMA.md                   # Schema SQLite documentado
@@ -265,10 +269,47 @@ ROI para la dueña:         5x-10x en valor recuperado vs precio
 | Semana | Focus | Estado |
 |--------|-------|--------|
 | **1-2** | Bot core + anti-cancel + reactivación | ✅ **COMPLETO** — 88 tests |
+| **2b** | Admin UI — alta/baja salones, servicios | ✅ **COMPLETO** — 104 tests |
 | **3** | Piloto real: conectar número WA, primer salón | 🔜 Siguiente |
 | **4** | Panel web refinado (feedback de uso real) | ⏳ Pendiente |
 | **5** | Multi-tenant (2+ salones en paralelo) | ⏳ Pendiente |
 | **6+** | Cold outreach Iztapalapa, primer pago | ⏳ Pendiente |
+
+---
+
+## Admin Panel — Alta de salones
+
+El panel de administración vive en `/admin` (mismo puerto 8085). Autenticado por `ADMIN_TOKEN` env var.
+
+```bash
+# Variables de entorno requeridas
+ADMIN_TOKEN=tu-token-secreto   # protege /admin
+PORT=8085                       # ya abierto en UFW
+DB_PATH=./data/salones.db
+SESSIONS_DIR=./data/sessions
+```
+
+### Flujo de alta de un salón
+
+1. **Navegar a** `http://<vps-ip>:8085/admin?token=TU_ADMIN_TOKEN`
+2. Click en **"+ Nuevo salón"**
+3. Llenar nombre, teléfono WA (ej: `5215512345678`) y servicios iniciales
+4. Al crear → el sistema muestra la **URL del panel para la dueña**
+5. Compartir esa URL con la dueña (se accede desde cualquier celular, sin app)
+6. Conectar el número WA: `npm run dev` → escanear QR en la terminal
+
+### Rutas del admin
+
+| Ruta | Descripción |
+|------|-------------|
+| `GET /admin` | Lista todos los salones |
+| `GET /admin/salones/new` | Formulario crear salón |
+| `POST /admin/salones` | Crear salón + servicios |
+| `GET /admin/salones/:id` | Editar nombre, teléfono, servicios |
+| `POST /admin/salones/:id/edit` | Guardar cambios |
+| `POST /admin/salones/:id/toggle` | Activar / desactivar |
+| `POST /admin/salones/:id/services` | Agregar servicio |
+| `POST /admin/salones/:id/services/:svcId/delete` | Eliminar servicio |
 
 ---
 
@@ -279,18 +320,17 @@ ROI para la dueña:         5x-10x en valor recuperado vs precio
 npm install
 
 # Ejecutar tests
-npm test            # 88/88 ✅
+npm test            # 104/104 ✅
 
 # Typecheck
 npm run typecheck   # 0 errores
 
-# Levantar en dev (necesita número WA real para Baileys)
-npm run dev
+# Levantar en dev
+ADMIN_TOKEN=admin123 npm run dev
 
-# Conectar primer salón
-# 1. Crear salón en DB con script de onboarding (próxima fase)
-# 2. Escanear QR con WA del salón
-# 3. Panel disponible en http://<vps-ip>:8085/panel/dashboard?token=<uuid>
+# Admin panel en: http://localhost:8085/admin?token=admin123
+# Crear primer salón desde el panel → obtener URL para dueña
+# Escanear QR con WA del número del salón
 ```
 
 ---

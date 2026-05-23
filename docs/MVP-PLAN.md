@@ -4,7 +4,8 @@
 **Decisiones fijas:** No piloto previo · Arranque desde cero · Web panel (no Sheets) · BD SQLite  
 **Creado:** 2026-05-23  
 **Versión:** v2 — 3 productos integrados  
-**Estado:** PLAN APROBADO — pendiente arranque de desarrollo
+**Estado:** ✅ MVP CONSTRUIDO — 88/88 tests, listo para piloto real  
+**Build date:** 2026-05-23
 
 ---
 

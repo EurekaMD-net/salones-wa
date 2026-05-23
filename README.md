@@ -5,12 +5,23 @@
 
 ---
 
+## Estado del proyecto
+
+| Métrica | Valor |
+|---------|-------|
+| **Fase** | MVP construido — listo para piloto con número real |
+| **Tests** | **88 / 88 ✅** |
+| **Typecheck** | 0 errores |
+| **Último commit** | 2026-05-23 |
+
+---
+
 ## Los 3 productos del sistema
 
 | # | Producto | Dolor que resuelve | Cuándo se activa |
-|---|----------|--------------------|--------------------|
+|---|----------|--------------------|-------------------|
 | 🥇 | **Asistente de Citas** | Dueña cortando → no responde → clienta se va | Inbound: clienta escribe primero |
-| 🥈 | **Reactivación de Dormidas** | Clienta que vino 1-3x y desapareció (>30 días sin cita) | Outbound: cron semanal |
+| 🥈 | **Reactivación de Dormidas** | Clienta que vino 1-3x y desapareció (>30 días sin cita) | Outbound: cron lunes 10am |
 | 🥉 | **Anti-Cancelación** | Slot vacío de último minuto, cita olvidada | Outbound: cron 24h + 2h antes |
 
 Los tres comparten una sola instancia de Baileys, una BD SQLite, y un panel web. **No son módulos separados — son flujos del mismo bot.**
@@ -23,17 +34,20 @@ Los tres comparten una sola instancia de Baileys, una BD SQLite, y un panel web.
 Clientas (inbound)  ─────► Baileys (Node.js, mismo VPS)
                                   │
                                   ▼
-                           Intent Parser (LLM Haiku + regex fallback)
+                           Intent Parser (regex — 7 intents)
+                                  │
+                                  ▼
+                           Message Handler
                                   │
                                   ▼
                            SQLite DB (multi-tenant)
-                      /salons / appointments / contacts
-                      /slots / services / campaigns
+                      salons / services / contacts
+                      appointments / campaigns
                                   │
                   ┌───────────────┼───────────────┐
                   ▼               ▼               ▼
            Flujo Citas     Cron Anti-Cancel  Cron Reactivación
-          (inbound 24/7)   (24h + 2h antes)  (semanal, dormidas)
+          (inbound 24/7)   (24h + 2h antes)  (lunes 10am)
                   └───────────────┼───────────────┘
                                   ▼
                            Web Panel (Hono @ :8085)
@@ -49,10 +63,10 @@ Clientas (inbound)  ─────► Baileys (Node.js, mismo VPS)
 | WA | **Baileys** | Cero costo, arranque en horas |
 | HTTP/Panel | **Hono** | Lightweight, mismo patrón que mission-control |
 | BD | **SQLite** (separada de mc.db) | Multi-tenant simple, sin deps externas |
-| LLM intents | **Claude Haiku** | ~$0.001/mensaje, con regex fallback |
+| Intent Parser | **Regex** (7 intents, sin LLM) | Cero latencia, cero costo, determinístico |
 | Crons | **node-cron** | Mismo patrón del VPS |
-| Despliegue | **systemd** | Mismo patrón que mission-control |
 | Puerto panel | **8085** | Ya abierto en UFW, sin cambios de firewall |
+| Runtime | **tsx** (dev) / **Node.js** (prod) | ESM nativo, TypeScript directo |
 
 ---
 
@@ -61,23 +75,53 @@ Clientas (inbound)  ─────► Baileys (Node.js, mismo VPS)
 ```
 salones-wa/
 ├── src/
-│   ├── bot/           # Baileys connection + message handler
-│   ├── intents/       # Intent parser (LLM + regex)
-│   ├── db/            # SQLite schema + queries
-│   ├── crons/         # remind-24h, remind-2h, reactivation, mark-completed
-│   ├── panel/         # Hono web panel (agenda, contactos, campañas)
-│   └── index.ts       # Entry point
-├── data/
-│   ├── salones.db     # SQLite DB (gitignored)
-│   └── sessions/      # Baileys session files (gitignored)
+│   ├── bot/
+│   │   ├── baileys-manager.ts      # Conexión WA + stub para dev/test
+│   │   ├── conversation-state.ts   # State machine en memoria, TTL 30min
+│   │   ├── intent-parser.ts        # Parser regex — 7 intents
+│   │   ├── message-handler.ts      # Handler principal — recibe texto, devuelve reply
+│   │   └── messages.ts             # Copy del bot centralizado
+│   ├── crons/
+│   │   └── index.ts                # 6 jobs: remind-24h, remind-2h, mark-completed,
+│   │                               #         update-dormant, reactivation-campaign, state-eviction
+│   ├── db/
+│   │   ├── database.ts             # Singleton getDb() + initDb(':memory:') para tests
+│   │   ├── models.ts               # Queries tipadas — salons, services, contacts, appointments, campaigns
+│   │   └── schema.ts               # DDL SQLite — 6 tablas + índices
+│   ├── web/
+│   │   └── panel.ts                # Hono panel :8085 — dashboard, contactos, campañas, API stats
+│   └── index.ts                    # Entry point + graceful shutdown
+├── tests/
+│   ├── intent-parser.test.ts       # 26 tests
+│   ├── models.test.ts              # 32 tests
+│   ├── message-handler.test.ts     # 15 tests
+│   ├── conversation-state.test.ts  # 6 tests
+│   └── web-panel.test.ts           # 9 tests
 ├── docs/
-│   ├── MVP-PLAN.md    # Plan completo del MVP
-│   ├── SCHEMA.md      # Schema SQLite documentado
-│   └── FLUJOS.md      # Flujos de conversación
+│   ├── MVP-PLAN.md                 # Plan completo del MVP
+│   ├── SCHEMA.md                   # Schema SQLite documentado
+│   └── FLUJOS.md                   # Flujos de conversación
+├── data/                           # gitignored — salones.db + sessions/
 ├── package.json
 ├── tsconfig.json
 └── README.md
 ```
+
+---
+
+## Intents del parser
+
+| Intent | Cuándo se activa |
+|--------|-----------------|
+| `book` | Quiero cita, agendar, corte, tinte, manicure... |
+| `cancel` | Cancelar, no puedo, no voy... |
+| `confirm` | Sí, confirmo, dale, ok... |
+| `query_appointment` | Mi cita, cuándo, a qué hora... |
+| `opt_out` | Stop, baja, no me mandes mensajes... |
+| `reactivation_yes` | Sí, claro, quiero, dale... (contexto reactivación) |
+| `reactivation_no` | No, ahorita no, después... (contexto reactivación) |
+
+El contexto (`'reactivation'`) se pasa cuando la conversación está en estado `reactivation_sent` para que `sí` resuelva como `reactivation_yes` y no como `confirm`.
 
 ---
 
@@ -96,17 +140,7 @@ Bot:      "✅ Listo! Tu cita es el sábado 28 a las 10:00am para corte.
            Te recordaré 24h antes. ¿Cambias algo?"
 ```
 
-### Flujo 2 — Reactivación (outbound, cron lunes 10am)
-```
-Condición: last_visit > 30 días, sin cita futura, al menos 1 cita completada
-Bot:       "Hola [nombre] 👋 Hace un tiempo que no te vemos por el salón.
-            ¿Cómo estás? Esta semana tenemos lugares disponibles —
-            ¿te agendo algo? Solo dime qué necesitas 💇‍♀️"
-Clienta:   "Sí! Quiero tinte"
-→ Activa Flujo 1 normalmente
-```
-
-### Flujo 3 — Anti-cancelación (outbound)
+### Flujo 2 — Anti-cancelación (outbound, crons)
 ```
 [24h antes]
 Bot:  "Hola [nombre] 😊 Te recuerdo que mañana tienes cita a las 10:00am
@@ -117,16 +151,26 @@ Bot:  "Recordatorio rápido: tu cita es hoy a las 10:00am.
        ¿Sigues viniendo? Cualquier cambio de último minuto, avísanos"
 ```
 
+### Flujo 3 — Reactivación (outbound, cron lunes 10am)
+```
+Condición: last_visit > 30 días, sin cita futura, al menos 1 cita completada
+Bot:       "Hola [nombre] 👋 Hace un tiempo que no te vemos por el salón.
+            ¿Cómo estás? Esta semana tenemos lugares disponibles —
+            ¿te agendo algo? Solo dime qué necesitas 💇‍♀️"
+Clienta:   "Sí! Quiero tinte"
+→ Activa Flujo 1 normalmente
+```
+
 ---
 
 ## Schema SQLite
 
 ```sql
-salons          -- Tenants (uno por salón)
+salons          -- Tenants (uno por salón), token UUID para panel auth
 services        -- Servicios y duración por salón
-slots           -- Horario disponible por día de semana
-contacts        -- Clientas: phone, last_visit, dormant flag
+contacts        -- Clientas: phone, visit_count, last_visit, dormant, opt_out
 appointments    -- Citas: status confirmed|cancelled|completed|no_show
+                --        reminded_24h, reminded_2h flags
 campaigns       -- Reactivaciones: sent_at, responded, booked
 ```
 
@@ -138,11 +182,36 @@ Ver `docs/SCHEMA.md` para el DDL completo.
 
 | Job | Schedule | Acción |
 |-----|----------|--------|
-| `remind-24h` | Cada hora | Busca citas en 24-25h → envía recordatorio |
-| `remind-2h` | Cada 30 min | Busca citas en 2-3h sin confirmación |
-| `mark-completed` | Cada hora | Marca como `completed` citas pasadas |
-| `update-dormant` | Diario 00:00 | Actualiza flag `dormant` en contacts |
-| `reactivation-campaign` | Lunes 10:00am | Detecta dormidas → dispara outbound |
+| `remind-24h` | `5 * * * *` (cada hora) | Busca citas en 24-25h → envía recordatorio |
+| `remind-2h` | `*/30 * * * *` (cada 30 min) | Busca citas en 2-3h sin confirmación |
+| `mark-completed` | `10 * * * *` (cada hora) | Marca como `completed` citas pasadas |
+| `update-dormant` | `15 0 * * *` (diario 00:15) | Actualiza flag `dormant` en contacts |
+| `reactivation-campaign` | `0 10 * * 1` (lunes 10am) | Detecta dormidas → dispara outbound, máx 20 msgs/h |
+| `state-eviction` | `*/30 * * * *` (cada 30 min) | Limpia conversation states con TTL expirado |
+
+---
+
+## Panel web (puerto 8085)
+
+Auth por token UUID en URL (`?token=<salon-uuid>`). Sin login, sin OAuth — funciona en 3G.
+
+| Ruta | Descripción |
+|------|-------------|
+| `GET /health` | Health check público |
+| `GET /panel/dashboard?token=` | Citas de hoy + estadísticas + contactos dormidos |
+| `GET /panel/contacts?token=` | Lista de contactos con filtros |
+| `GET /panel/campaigns?token=` | Historial y métricas de campañas de reactivación |
+| `GET /api/stats?token=` | JSON con métricas del salón |
+
+---
+
+## Variables de entorno
+
+```bash
+PORT=8085              # Puerto del panel web (default: 8085)
+DB_PATH=./data/salones.db  # Ruta SQLite (default: ./data/salones.db)
+SESSIONS_DIR=./data/sessions  # Sesiones Baileys (default: ./data/sessions)
+```
 
 ---
 
@@ -152,34 +221,22 @@ Ver `docs/SCHEMA.md` para el DDL completo.
 Asistente de Citas:        Citas agendadas mientras duermes → no pierdes clientas
 Anti-cancelación:          -20% no-shows → 2-4 slots recuperados/semana → $400-800 MXN/sem
 Reactivación de dormidas:  1 clienta reactivada/semana → $200-400 MXN extra
-─────────────────────────────────────────────────────────────────────────────────
-Total valor generado:      ~$1,200-2,000 MXN/semana por salón
+─────────────────────────────────────────────────────────────────────────────────────────
+Total valor generado:      ~$600-1,200 MXN/semana por salón
 Precio del servicio:       $500-800/mes
-ROI para la dueña:         5x-10x en valor recuperado
+ROI para la dueña:         5x-10x en valor recuperado vs precio
 ```
 
 ---
 
-## Fases de desarrollo
-
-| Semana | Focus | Verificación |
-|--------|-------|-------------|
-| **1-2** | Bot core + anti-cancel | Cita agendada por WA + 2 recordatorios enviados |
-| **2** | Reactivación (paralelo) | Cron corre, al menos 1 respuesta genera cita |
-| **3** | Panel web | Dueña ve agenda desde su celular |
-| **4** | Multi-tenant | 2 salones en paralelo sin interferencia |
-| **5+** | Ventas | Cold outreach Iztapalapa, primer pago |
-
----
-
-## Riesgos principales
+## Riesgos y mitigaciones
 
 | Riesgo | Mitigación |
-|--------|-----------|
-| WhatsApp banea número | Delays humanos, número secundario para dev, rate limit 20 msgs/h |
+|--------|-----------| 
+| WhatsApp banea número | Delays aleatorios (2-5s), número secundario para dev, rate limit 20 msgs/h |
 | Dueña no sabe escanear QR | Video tutorial 60s, soporte onboarding |
-| Clienta molesta por outbound | Solo contactar con historial real, máx 1x/mes, opt-out inmediato |
-| Pérdida de sesión WA | Auto-reconexión, alerta admin si falla 3 veces |
+| Clienta molesta por outbound | Solo contactar con historial real, máx 1x/mes por contacto, opt-out inmediato |
+| Pérdida de sesión WA | Auto-reconexión en `baileys-manager.ts` (3 intentos), log de desconexión |
 
 ---
 
@@ -203,13 +260,40 @@ ROI para la dueña:         5x-10x en valor recuperado
 
 ---
 
-## Estado actual
+## Fases de desarrollo
 
-- **Fase:** Pre-desarrollo — plan aprobado
-- **Decisiones tomadas:** Baileys · SQLite · Web panel · mismo VPS
-- **Próximo paso:** `npm init` + conexión Baileys + schema inicial
+| Semana | Focus | Estado |
+|--------|-------|--------|
+| **1-2** | Bot core + anti-cancel + reactivación | ✅ **COMPLETO** — 88 tests |
+| **3** | Piloto real: conectar número WA, primer salón | 🔜 Siguiente |
+| **4** | Panel web refinado (feedback de uso real) | ⏳ Pendiente |
+| **5** | Multi-tenant (2+ salones en paralelo) | ⏳ Pendiente |
+| **6+** | Cold outreach Iztapalapa, primer pago | ⏳ Pendiente |
+
+---
+
+## Quick start (desarrollo)
+
+```bash
+# Instalar deps
+npm install
+
+# Ejecutar tests
+npm test            # 88/88 ✅
+
+# Typecheck
+npm run typecheck   # 0 errores
+
+# Levantar en dev (necesita número WA real para Baileys)
+npm run dev
+
+# Conectar primer salón
+# 1. Crear salón en DB con script de onboarding (próxima fase)
+# 2. Escanear QR con WA del salón
+# 3. Panel disponible en http://<vps-ip>:8085/panel/dashboard?token=<uuid>
+```
 
 ---
 
 *Proyecto: Negocios Auto-Gestionados · Vertical: Salones de Belleza*  
-*Iniciado: 2026-05-23*
+*Iniciado: 2026-05-23 · MVP construido: 2026-05-23*

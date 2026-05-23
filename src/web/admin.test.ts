@@ -25,7 +25,11 @@ async function post(app: ReturnType<typeof makeApp>, path: string, body?: Record
   const formData = new URLSearchParams(body ?? {})
   const req = new Request(`http://localhost${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Origin': 'http://localhost',
+      'Host': 'localhost', // CSRF check: node Request doesn't auto-add Host
+    },
     body: formData.toString(),
   })
   return app.fetch(req)
@@ -81,7 +85,7 @@ describe('Admin Panel — Salon list', () => {
     })
     const req = new Request(`http://localhost/admin/salones?token=${ADMIN_TOKEN}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Origin': 'http://localhost', 'Host': 'localhost' },
       body: formData.toString(),
     })
     const createRes = await app.fetch(req)
@@ -120,7 +124,7 @@ describe('Admin Panel — Create salon', () => {
     })
     const req = new Request(`http://localhost/admin/salones?token=${ADMIN_TOKEN}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Origin': 'http://localhost', 'Host': 'localhost' },
       body: formData.toString(),
     })
     const res = await app.fetch(req)
@@ -149,7 +153,7 @@ describe('Admin Panel — Create salon', () => {
 
     const req = new Request(`http://localhost/admin/salones?token=${ADMIN_TOKEN}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Origin': 'http://localhost', 'Host': 'localhost' },
       body: formData.toString(),
     })
     await app.fetch(req)
@@ -164,7 +168,7 @@ describe('Admin Panel — Create salon', () => {
   it('returns 400 when name or phone missing', async () => {
     const req = new Request(`http://localhost/admin/salones?token=${ADMIN_TOKEN}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Origin': 'http://localhost', 'Host': 'localhost' },
       body: 'name=&phone=',
     })
     const res = await app.fetch(req)
@@ -201,7 +205,7 @@ describe('Admin Panel — Salon detail / edit', () => {
   it('POST edit updates name', async () => {
     const req = new Request(`http://localhost/admin/salones/${salonId}/edit?token=${ADMIN_TOKEN}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Origin': 'http://localhost', 'Host': 'localhost' },
       body: 'name=Salón+Actualizado&phone=525511223344',
     })
     const res = await app.fetch(req)
@@ -231,6 +235,7 @@ describe('Admin Panel — Toggle active', () => {
 
     const req = new Request(`http://localhost/admin/salones/${salonId}/toggle?token=${ADMIN_TOKEN}`, {
       method: 'POST',
+      headers: { 'Origin': 'http://localhost', 'Host': 'localhost' },
     })
     const res = await app.fetch(req)
     expect(res.status).toBe(302)
@@ -245,6 +250,7 @@ describe('Admin Panel — Toggle active', () => {
 
     const req = new Request(`http://localhost/admin/salones/${salonId}/toggle?token=${ADMIN_TOKEN}`, {
       method: 'POST',
+      headers: { 'Origin': 'http://localhost', 'Host': 'localhost' },
     })
     await app.fetch(req)
 
@@ -269,7 +275,7 @@ describe('Admin Panel — Service management', () => {
   it('POST /services adds a service', async () => {
     const req = new Request(`http://localhost/admin/salones/${salonId}/services?token=${ADMIN_TOKEN}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Origin': 'http://localhost', 'Host': 'localhost' },
       body: 'name=Manicure&duration_min=45&price=120',
     })
     const res = await app.fetch(req)
@@ -288,6 +294,7 @@ describe('Admin Panel — Service management', () => {
 
     const req = new Request(`http://localhost/admin/salones/${salonId}/services/${svc.id}/delete?token=${ADMIN_TOKEN}`, {
       method: 'POST',
+      headers: { 'Origin': 'http://localhost', 'Host': 'localhost' },
     })
     const res = await app.fetch(req)
     expect(res.status).toBe(302)

@@ -113,9 +113,19 @@ describe('parseIntent', () => {
       const r = parseIntent('no', 'reactivation')
       expect(r.type).toBe('reactivation_no')
     })
-    it('maps "quiero tinte" to reactivation_yes (contains affirmative)', () => {
+    it('maps "quiero tinte" to unknown (W2: broad quiero no longer matches YES)', () => {
       const r = parseIntent('quiero tinte', 'reactivation')
+      expect(r.type).toBe('unknown')
+    })
+
+    it('maps "si quiero" to reactivation_yes (anchored YES phrase)', () => {
+      const r = parseIntent('si quiero', 'reactivation')
       expect(r.type).toBe('reactivation_yes')
+    })
+
+    it('maps "no quiero" to reactivation_no (W2: NO checked before YES)', () => {
+      const r = parseIntent('no quiero', 'reactivation')
+      expect(r.type).toBe('reactivation_no')
     })
   })
 

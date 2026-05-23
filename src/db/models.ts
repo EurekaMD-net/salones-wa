@@ -125,8 +125,12 @@ export function updateService(
   return (db.prepare('SELECT * FROM services WHERE id = ?').get(id) as Service) ?? null
 }
 
-export function deleteService(db: Database.Database, id: string): void {
-  db.prepare('UPDATE services SET active = 0 WHERE id = ?').run(id)
+export function deleteService(db: Database.Database, id: string, salon_id?: string): void {
+  if (salon_id) {
+    db.prepare('UPDATE services SET active = 0 WHERE id = ? AND salon_id = ?').run(id, salon_id)
+  } else {
+    db.prepare('UPDATE services SET active = 0 WHERE id = ?').run(id)
+  }
 }
 
 // ─── Services ────────────────────────────────────────────────────────────────
@@ -269,24 +273,27 @@ export function cancelAppointment(db: Database.Database, appointment_id: string)
 
 export function completePassedAppointments(db: Database.Database): number {
   const now = Math.floor(Date.now() / 1000)
-  const result = db.prepare(`
-    UPDATE appointments SET status = 'completed'
-    WHERE status = 'confirmed' AND ends_at < ?
-  `).run(now)
 
-  if (result.changes > 0) {
+  // RETURNING captures only the rows just transitioned (not ALL past completed).
+  // This prevents visit_count from inflating every time the cron runs.
+  const justCompleted = db.prepare(`
+    UPDATE appointments SET status = 'completed'
+    WHERE status IN ('confirmed', 'pending') AND ends_at < ?
+    RETURNING contact_id
+  `).all(now) as Array<{ contact_id: string }>
+
+  if (justCompleted.length > 0) {
+    const placeholders = justCompleted.map(() => '?').join(',')
+    const contactIds = justCompleted.map(r => r.contact_id)
     db.prepare(`
       UPDATE contacts
       SET visit_count = visit_count + 1,
           last_visit = unixepoch()
-      WHERE id IN (
-        SELECT contact_id FROM appointments
-        WHERE status = 'completed' AND ends_at < ?
-      )
-    `).run(now)
+      WHERE id IN (${placeholders})
+    `).run(...contactIds)
   }
 
-  return result.changes
+  return justCompleted.length
 }
 
 export function getNextAppointmentForContact(db: Database.Database, contact_id: string): Appointment | null {

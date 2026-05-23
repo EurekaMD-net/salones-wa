@@ -2,9 +2,16 @@
  * Admin UI — /admin/*
  * Protected by ADMIN_TOKEN env var (NOT the per-salon token)
  * All state mutations via POST forms (no JS required)
+ *
+ * SECURITY NOTE: ADMIN_TOKEN is the sole credential for this panel.
+ * It travels in URL query strings — treat it like a password.
+ * Never share the admin URL publicly. Rotate after any exposure.
  */
 
 import { Hono } from 'hono'
+import type { Context } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
+import { timingSafeEqual } from 'crypto'
 import type Database from 'better-sqlite3'
 import {
   getAllSalons,
@@ -18,8 +25,83 @@ import {
   deleteService,
 } from '../db/models.js'
 
+/** Escape HTML to prevent XSS from DB strings rendered in templates */
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 function getAdminToken(): string {
-  return process.env['ADMIN_TOKEN'] ?? 'changeme'
+  const token = process.env['ADMIN_TOKEN']
+  if (!token) throw new Error('[salones-wa] ADMIN_TOKEN env var is required but not set')
+  if (token.length < 16) throw new Error('[salones-wa] ADMIN_TOKEN must be at least 16 characters')
+  return token
+}
+
+/** Constant-time token comparison to prevent timing attacks */
+function safeTokenCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) {
+    // Still do a dummy compare to avoid length-based timing leak
+    timingSafeEqual(Buffer.from(a), Buffer.alloc(a.length))
+    return false
+  }
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b))
+}
+
+// Per-IP brute-force protection (in-memory, resets on restart)
+const authAttempts = new Map<string, { count: number; resetAt: number }>()
+const MAX_AUTH_ATTEMPTS = 5
+const AUTH_WINDOW_MS = 60_000
+
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now()
+  const record = authAttempts.get(ip)
+  if (!record || record.resetAt < now) {
+    authAttempts.set(ip, { count: 0, resetAt: now + AUTH_WINDOW_MS })
+    return true // OK
+  }
+  return record.count < MAX_AUTH_ATTEMPTS
+}
+
+function recordFailedAttempt(ip: string): void {
+  const now = Date.now()
+  const record = authAttempts.get(ip)
+  if (!record || record.resetAt < now) {
+    authAttempts.set(ip, { count: 1, resetAt: now + AUTH_WINDOW_MS })
+  } else {
+    record.count++
+  }
+}
+
+/** Validate phone: digits only, 10-15 chars (international format) */
+function isValidPhone(phone: string): boolean {
+  return /^\d{10,15}$/.test(phone)
+}
+
+/** Check CSRF: Origin or Referer must match the request Host */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function checkCsrf(c: Context<any, any, any>): boolean {
+  const host = c.req.header('host')
+  if (!host) return false
+  const origin = c.req.header('origin')
+  const referer = c.req.header('referer')
+  if (origin) {
+    try {
+      const originHost = new URL(origin).host
+      return originHost === host
+    } catch { return false }
+  }
+  if (referer) {
+    try {
+      const refererHost = new URL(referer).host
+      return refererHost === host
+    } catch { return false }
+  }
+  return false
 }
 
 // ─── Shared layout helpers ───────────────────────────────────────────────────
@@ -100,10 +182,27 @@ function layout(title: string, body: string, adminToken: string): string {
 export function createAdminPanel(db: Database.Database): Hono {
   const app = new Hono()
 
+  // W7: Body size limit on all admin routes (DoS protection)
+  app.use('/admin/*', bodyLimit({ maxSize: 32 * 1024 })) // 32 KB
+
   // Auth guard — all /admin routes
   app.use('/admin/*', async (c, next) => {
-    const token = c.req.query('token')
-    if (!token || token !== getAdminToken()) {
+    const ip = c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown'
+
+    if (!checkRateLimit(ip)) {
+      return c.text('Demasiados intentos. Espera 1 minuto.', 429)
+    }
+
+    const token = c.req.query('token') ?? ''
+    let adminToken: string
+    try {
+      adminToken = getAdminToken()
+    } catch {
+      return c.text('Configuración del servidor incompleta. Contacta al administrador.', 503)
+    }
+
+    if (!safeTokenCompare(token, adminToken)) {
+      recordFailedAttempt(ip)
       return c.text('Token de administrador requerido o inválido\n\nUsa: /admin?token=TU_ADMIN_TOKEN', 401)
     }
     await next()
@@ -120,8 +219,8 @@ export function createAdminPanel(db: Database.Database): Hono {
         ? '<span class="badge-active">Activo</span>'
         : '<span class="badge-inactive">Inactivo</span>'
       return `<tr>
-        <td><strong>${s.name}</strong></td>
-        <td style="font-family:monospace;font-size:0.85rem">${s.phone}</td>
+        <td><strong>${escapeHtml(s.name)}</strong></td>
+        <td style="font-family:monospace;font-size:0.85rem">${escapeHtml(s.phone)}</td>
         <td>${statusBadge}</td>
         <td>${created}</td>
         <td class="actions">
@@ -209,6 +308,7 @@ export function createAdminPanel(db: Database.Database): Hono {
 
   // ─── POST /admin/salones — crear ─────────────────────────────────────
   app.post('/admin/salones', async c => {
+    if (!checkCsrf(c)) return c.text('Solicitud inválida', 403)
     const adminToken = c.req.query('token')!
     const form = await c.req.formData()
 
@@ -217,6 +317,10 @@ export function createAdminPanel(db: Database.Database): Hono {
 
     if (!name || !phone) {
       return c.html(layout('Error', '<div class="alert" style="background:#fee;border:1px solid #fcc;color:#c0392b">Nombre y teléfono son requeridos.</div><a href="/admin/salones/new?token=' + adminToken + '" class="btn btn-secondary">← Volver</a>', adminToken), 400)
+    }
+
+    if (!isValidPhone(phone)) {
+      return c.html(layout('Error', '<div class="alert" style="background:#fee;border:1px solid #fcc;color:#c0392b">Teléfono inválido. Usa solo dígitos, formato 52XXXXXXXXXX (10-15 dígitos).</div><a href="/admin/salones/new?token=' + adminToken + '" class="btn btn-secondary">← Volver</a>', adminToken), 400)
     }
 
     const salon = createSalon(db, { name, phone })
@@ -236,7 +340,7 @@ export function createAdminPanel(db: Database.Database): Hono {
 
     const panelUrl = `http://localhost:8085/panel/dashboard?token=${salon.token}`
     const body = `
-      <div class="alert alert-success">✅ Salón <strong>${salon.name}</strong> creado exitosamente.</div>
+      <div class="alert alert-success">✅ Salón <strong>${escapeHtml(salon.name)}</strong> creado exitosamente.</div>
       <div class="card">
         <div class="card-header"><h2>URL del panel para la dueña</h2></div>
         <div class="card-body">
@@ -264,10 +368,10 @@ export function createAdminPanel(db: Database.Database): Hono {
 
     const serviceRows = services.map(s => `
       <div class="service-row">
-        <span class="svc-name">${s.name}</span>
+        <span class="svc-name">${escapeHtml(s.name)}</span>
         <span class="svc-meta">${s.duration_min} min · ${s.price != null ? '$' + s.price : 'Sin precio'}</span>
         <form method="POST" action="/admin/salones/${salon.id}/services/${s.id}/delete?token=${adminToken}" style="display:inline">
-          <button type="submit" class="btn btn-danger btn-sm">Eliminar</button>
+          <button type="submit" class="btn btn-danger btn-sm">Desactivar servicio</button>
         </form>
       </div>`).join('')
 
@@ -279,7 +383,7 @@ export function createAdminPanel(db: Database.Database): Hono {
       <!-- Datos del salón -->
       <div class="card" style="margin-bottom:16px">
         <div class="card-header">
-          <h2>${salon.name}</h2>
+          <h2>${escapeHtml(salon.name)}</h2>
           <span class="${salon.active ? 'badge-active' : 'badge-inactive'}">${salon.active ? 'Activo' : 'Inactivo'}</span>
         </div>
         <div class="card-body">
@@ -287,11 +391,11 @@ export function createAdminPanel(db: Database.Database): Hono {
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
               <div class="form-group">
                 <label>Nombre del salón</label>
-                <input class="form-control" name="name" value="${salon.name}" required />
+                <input class="form-control" name="name" value="${escapeHtml(salon.name)}" required />
               </div>
               <div class="form-group">
-                <label>Número WhatsApp</label>
-                <input class="form-control" name="phone" value="${salon.phone}" required />
+                <label>Número WhatsApp (solo dígitos, ej: 52XXXXXXXXXX)</label>
+                <input class="form-control" name="phone" value="${escapeHtml(salon.phone)}" required pattern="\d{10,15}" title="Solo dígitos, 10-15 caracteres" />
               </div>
             </div>
             <button type="submit" class="btn btn-primary">Guardar cambios</button>
@@ -357,6 +461,7 @@ export function createAdminPanel(db: Database.Database): Hono {
 
   // ─── POST /admin/salones/:id/edit — guardar edición ──────────────────
   app.post('/admin/salones/:id/edit', async c => {
+    if (!checkCsrf(c)) return c.text('Solicitud inválida', 403)
     const adminToken = c.req.query('token')!
     const salon = getSalonById(db, c.req.param('id'))
     if (!salon) return c.text('Salón no encontrado', 404)
@@ -364,6 +469,10 @@ export function createAdminPanel(db: Database.Database): Hono {
     const form = await c.req.formData()
     const name = (form.get('name') as string | null)?.trim()
     const phone = (form.get('phone') as string | null)?.trim()
+
+    if (phone && !isValidPhone(phone)) {
+      return c.text('Teléfono inválido. Solo dígitos, 10-15 caracteres.', 400)
+    }
 
     updateSalon(db, salon.id, {
       ...(name ? { name } : {}),
@@ -375,6 +484,7 @@ export function createAdminPanel(db: Database.Database): Hono {
 
   // ─── POST /admin/salones/:id/toggle — activar/desactivar ─────────────
   app.post('/admin/salones/:id/toggle', c => {
+    if (!checkCsrf(c)) return c.text('Solicitud inválida', 403)
     const adminToken = c.req.query('token')!
     const salon = getSalonById(db, c.req.param('id'))
     if (!salon) return c.text('Salón no encontrado', 404)
@@ -385,6 +495,7 @@ export function createAdminPanel(db: Database.Database): Hono {
 
   // ─── POST /admin/salones/:id/services — agregar servicio ─────────────
   app.post('/admin/salones/:id/services', async c => {
+    if (!checkCsrf(c)) return c.text('Solicitud inválida', 403)
     const adminToken = c.req.query('token')!
     const salon = getSalonById(db, c.req.param('id'))
     if (!salon) return c.text('Salón no encontrado', 404)
@@ -404,11 +515,13 @@ export function createAdminPanel(db: Database.Database): Hono {
 
   // ─── POST /admin/salones/:id/services/:svcId/delete ──────────────────
   app.post('/admin/salones/:id/services/:svcId/delete', c => {
+    if (!checkCsrf(c)) return c.text('Solicitud inválida', 403)
     const adminToken = c.req.query('token')!
     const salon = getSalonById(db, c.req.param('id'))
     if (!salon) return c.text('Salón no encontrado', 404)
 
-    deleteService(db, c.req.param('svcId'))
+    // W10: enforce salon scoping — only delete services belonging to this salon
+    deleteService(db, c.req.param('svcId'), salon.id)
     return c.redirect(`/admin/salones/${salon.id}?token=${adminToken}`)
   })
 

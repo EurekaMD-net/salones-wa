@@ -37,16 +37,21 @@ const QUERY_APPOINTMENT_PATTERNS = [
 ]
 
 const OPT_OUT_PATTERNS = [
-  /\b(no me mandes|no me env[ií]es|stop|baja|darme de baja|no quiero mensajes|quitar)\b/i,
+  // W1: Removed bare 'quitar' — too common in cancel requests ("quitar mi cita").
+  // Require it only in unambiguous unsubscribe phrasing.
+  /\b(no me mandes|no me env[ií]es|stop|baja|darme de baja|no quiero mensajes|quitar de la lista|quitarme los mensajes)\b/i,
 ]
 
+// W2: Check NO patterns BEFORE YES, and anchor YES to avoid false positives like "no quiero".
+// "quiero" alone is too broad — anchored phrases are required for YES.
 const REACTIVATION_YES_PATTERNS = [
   /^\s*s[ií]\s*$/i,
-  /\b(s[ií]|claro|dale|agendar|quisiera|quiero|por favor)\b/i,
+  /^\s*(claro|dale|por favor|sí quiero|si quiero|quisiera agendar|quiero cita|agendar cita)\s*$/i,
 ]
 
 const REACTIVATION_NO_PATTERNS = [
-  /^\s*(no|no gracias|ahorita no|luego|despu[eé]s)\s*$/i,
+  /^\s*(no|no gracias|ahorita no|luego|despu[eé]s|no quiero|no me interesa|no gracias|cancel)\s*$/i,
+  /\bno quiero\b/i,
 ]
 
 function matchAny(text: string, patterns: RegExp[]): boolean {
@@ -102,13 +107,14 @@ export function parseIntent(text: string, context?: 'reactivation'): Intent {
     return { type: 'cancel' }
   }
 
-  // Check reactivation context BEFORE generic confirm — reactivation yes/no takes priority
+  // Check reactivation context BEFORE generic confirm — reactivation yes/no takes priority.
+  // W2: Check NO BEFORE YES to prevent "no quiero" matching the unanchored YES pattern.
   if (context === 'reactivation') {
-    if (matchAny(trimmed, REACTIVATION_YES_PATTERNS)) {
-      return { type: 'reactivation_yes' }
-    }
     if (matchAny(trimmed, REACTIVATION_NO_PATTERNS)) {
       return { type: 'reactivation_no' }
+    }
+    if (matchAny(trimmed, REACTIVATION_YES_PATTERNS)) {
+      return { type: 'reactivation_yes' }
     }
   }
 

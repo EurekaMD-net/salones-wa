@@ -119,32 +119,35 @@ export function registerCrons(db: Database.Database, sendMessage: SendMessageFn)
   cron.schedule('0 10 * * 1', async () => {
     try {
       const salons = db.prepare('SELECT * FROM salons WHERE active = 1').all() as Array<{ id: string; phone: string }>
-      const RATE_LIMIT = 20
-      let sent = 0
+      // W5: Rate limit is per-salon (not global) to ensure fair multi-tenant distribution
+      const RATE_LIMIT_PER_SALON = 20
+      let totalSent = 0
 
       for (const salon of salons) {
         const dormants = getDormantContacts(db, salon.id)
+        let salonSent = 0
 
         for (const contact of dormants) {
-          if (sent >= RATE_LIMIT) {
-            console.log('[reactivation] rate limit reached, stopping for this run')
+          if (salonSent >= RATE_LIMIT_PER_SALON) {
+            console.log(`[reactivation] salon ${salon.id} rate limit reached (${RATE_LIMIT_PER_SALON}), moving to next salon`)
             break
           }
 
           if (hasRecentCampaign(db, contact.id, 30)) continue
 
+          const { Messages } = await import('../bot/messages.js')
+          const text = Messages.reactivationOutbound(contact)
+
+          // W6: Send BEFORE recording — only record if send succeeded
+          await sendMessage(salon.phone, contact.phone, text)
+
+          // Send succeeded — now record campaign + arm state
           const campaign = createCampaign(db, {
             salon_id: salon.id,
             contact_id: contact.id,
             type: 'reactivation',
           })
 
-          const { Messages } = await import('../bot/messages.js')
-          const text = Messages.reactivationOutbound(contact)
-
-          await sendMessage(salon.phone, contact.phone, text)
-
-          // Set conversation state so inbound reply is handled correctly
           conversationState.set({
             step: 'reactivation_sent',
             salon_id: salon.id,
@@ -153,12 +156,13 @@ export function registerCrons(db: Database.Database, sendMessage: SendMessageFn)
             updated_at: Date.now(),
           }, contact.phone)
 
-          sent++
+          salonSent++
+          totalSent++
           // Small delay between messages (anti-ban)
           await new Promise(r => setTimeout(r, 2000 + Math.random() * 3000))
         }
       }
-      console.log(`[reactivation-campaign] sent ${sent} messages`)
+      console.log(`[reactivation-campaign] sent ${totalSent} messages across ${salons.length} salons`)
     } catch (err) {
       console.error('[reactivation-campaign] error', err)
     }

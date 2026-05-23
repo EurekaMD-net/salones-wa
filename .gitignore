@@ -1,0 +1,8 @@
+node_modules/
+dist/
+data/salones.db
+data/salones.db-shm
+data/salones.db-wal
+data/sessions/
+.env
+*.log

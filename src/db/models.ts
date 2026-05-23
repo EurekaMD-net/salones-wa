@@ -125,12 +125,8 @@ export function updateService(
   return (db.prepare('SELECT * FROM services WHERE id = ?').get(id) as Service) ?? null
 }
 
-export function deleteService(db: Database.Database, id: string, salon_id?: string): void {
-  if (salon_id) {
-    db.prepare('UPDATE services SET active = 0 WHERE id = ? AND salon_id = ?').run(id, salon_id)
-  } else {
-    db.prepare('UPDATE services SET active = 0 WHERE id = ?').run(id)
-  }
+export function deleteService(db: Database.Database, id: string, salon_id: string): void {
+  db.prepare('UPDATE services SET active = 0 WHERE id = ? AND salon_id = ?').run(id, salon_id)
 }
 
 // ─── Services ────────────────────────────────────────────────────────────────

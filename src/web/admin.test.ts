@@ -60,6 +60,30 @@ describe('Admin Panel — Auth guard', () => {
     const text = await res.text()
     expect(text).toContain('Admin Salones')
   })
+
+  it('returns 503 when ADMIN_TOKEN is missing at request time (P0-1 regression pin)', async () => {
+    // createAdminPanel is called at module-load time (ADMIN_TOKEN valid then).
+    // getAdminToken() is called per-request; if env is unset at that point → 503.
+    const orig = process.env['ADMIN_TOKEN']
+    delete process.env['ADMIN_TOKEN']
+    try {
+      const res = await get(app, '/admin?token=whatever')
+      expect(res.status).toBe(503)
+    } finally {
+      process.env['ADMIN_TOKEN'] = orig
+    }
+  })
+
+  it('returns 503 when ADMIN_TOKEN is under 16 chars at request time (P0-1 regression pin)', async () => {
+    const orig = process.env['ADMIN_TOKEN']
+    process.env['ADMIN_TOKEN'] = 'short'
+    try {
+      const res = await get(app, '/admin?token=short')
+      expect(res.status).toBe(503)
+    } finally {
+      process.env['ADMIN_TOKEN'] = orig
+    }
+  })
 })
 
 describe('Admin Panel — Salon list', () => {

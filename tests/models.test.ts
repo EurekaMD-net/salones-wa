@@ -257,6 +257,38 @@ describe('completePassedAppointments', () => {
     const updated = db.prepare('SELECT * FROM appointments WHERE id = ?').get(appt.id) as { status: string }
     expect(updated.status).toBe('confirmed')
   })
+
+  it('is idempotent across multiple cron runs (P0-2 regression pin)', () => {
+    // Seed 3 contacts each with one past confirmed appointment
+    const salon = makeSalon()
+    const contacts = Array.from({ length: 3 }, (_, i) => {
+      const c = upsertContact(db, { salon_id: salon.id, phone: `+525510000${i + 10}` })
+      db.prepare(
+        `INSERT INTO appointments (id, salon_id, contact_id, starts_at, ends_at, status)
+         VALUES (?, ?, ?, ?, ?, 'confirmed')`
+      ).run(`apt-idem-${i}`, salon.id, c.id, now() - 7200 - i, now() - 3600 - i)
+      return c
+    })
+
+    // First run — transitions all 3 to 'completed' and bumps visit_count to 1
+    expect(completePassedAppointments(db)).toBe(3)
+    const lastVisitsAfterFirst = contacts.map(c =>
+      db.prepare('SELECT visit_count, last_visit FROM contacts WHERE id = ?')
+        .get(c.id) as { visit_count: number; last_visit: number }
+    )
+    for (const v of lastVisitsAfterFirst) expect(v.visit_count).toBe(1)
+
+    // Subsequent 4 runs — should be no-ops
+    for (let i = 0; i < 4; i++) expect(completePassedAppointments(db)).toBe(0)
+
+    // visit_count and last_visit must be unchanged after runs 2-5
+    for (let i = 0; i < contacts.length; i++) {
+      const after = db.prepare('SELECT visit_count, last_visit FROM contacts WHERE id = ?')
+        .get(contacts[i].id) as { visit_count: number; last_visit: number }
+      expect(after.visit_count).toBe(1)
+      expect(after.last_visit).toBe(lastVisitsAfterFirst[i].last_visit)
+    }
+  })
 })
 
 // ─── Dormant contacts ─────────────────────────────────────────────────────────

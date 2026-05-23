@@ -320,17 +320,81 @@ SESSIONS_DIR=./data/sessions
 npm install
 
 # Ejecutar tests
-npm test            # 104/104 ✅
+npm test            # 109/109 ✅
 
 # Typecheck
 npm run typecheck   # 0 errores
 
-# Levantar en dev
-ADMIN_TOKEN=admin123 npm run dev
+# Levantar en dev (bind a 0.0.0.0 para acceso local directo)
+ADMIN_TOKEN=admin123 BIND_HOST=0.0.0.0 npm run dev
 
 # Admin panel en: http://localhost:8085/admin?token=admin123
 # Crear primer salón desde el panel → obtener URL para dueña
 # Escanear QR con WA del número del salón
+```
+
+## Deployment (producción)
+
+El servicio se enlaza a `127.0.0.1:8085` por default. Para exposición pública, usar Caddy como reverse proxy.
+
+### Exponer vía Caddy
+
+**Prerequisito:** DNS `salones.mycommit.net` apuntando a la IP del VPS.
+
+```
+# Agregar al Caddyfile:
+salones.mycommit.net {
+    reverse_proxy localhost:8085
+}
+```
+
+Para acceso temporal sin DNS: `BIND_HOST=0.0.0.0` en `.env` (NO recomendado para producción permanente).
+
+### Systemd unit
+
+```ini
+[Unit]
+Description=Salones WA — Asistente de citas WhatsApp
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/claude/projects/salones-wa
+EnvironmentFile=/root/claude/projects/salones-wa/.env
+ExecStart=/root/claude/projects/salones-wa/node_modules/.bin/tsx src/index.ts
+Restart=always
+RestartSec=5
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=salones-wa
+User=salones-wa
+Group=salones-wa
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### C4 — Usuario dedicado (runbook para operador)
+
+Ejecutar una sola vez antes de levantar con systemd:
+
+```bash
+# 1. Crear usuario sin shell ni home público
+useradd -r -s /bin/false -d /root/claude/projects/salones-wa salones-wa
+
+# 2. Dar ownership del directorio de datos
+chown -R salones-wa:salones-wa /root/claude/projects/salones-wa/data/
+
+# 3. Instalar el unit file
+cp /path/to/salones-wa.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable salones-wa
+systemctl start salones-wa
+
+# 4. Verificar
+systemctl status salones-wa
+journalctl -u salones-wa -f --since "1 min ago"
 ```
 
 ---

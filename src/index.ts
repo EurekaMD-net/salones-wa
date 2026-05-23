@@ -4,6 +4,8 @@
  */
 
 import { serve } from '@hono/node-server'
+import fs from 'node:fs'
+import path from 'node:path'
 import { getDb } from './db/database.js'
 import { getAllActiveSalons } from './db/models.js'
 import { createWebPanel } from './web/panel.js'
@@ -31,13 +33,24 @@ async function main() {
   const db = getDb(DB_PATH)
   console.log('[salones-wa] DB ready')
 
+  // ─── W3: harden file permissions at startup (idempotent) ─────────────
+  const sessionsDir = path.resolve(SESSIONS_DIR)
+  fs.mkdirSync(sessionsDir, { recursive: true })
+  fs.chmodSync(sessionsDir, 0o700)
+  const dbFile = path.resolve(DB_PATH)
+  if (fs.existsSync(dbFile)) fs.chmodSync(dbFile, 0o600)
+  const dbWal = dbFile + '-wal'
+  if (fs.existsSync(dbWal)) fs.chmodSync(dbWal, 0o600)
+  const dbShm = dbFile + '-shm'
+  if (fs.existsSync(dbShm)) fs.chmodSync(dbShm, 0o600)
+
   // ─── Web panel + Admin (Hono) ────────────────────────────────────────
-  // Bind: 0.0.0.0 for direct public access during pre-production testing.
-  // TODO (C1): switch to '127.0.0.1' + Caddy reverse-proxy before go-live.
+  // Binds to 127.0.0.1 by default. Front with Caddy for public access.
+  // To override (NOT recommended for production): set BIND_HOST=0.0.0.0 in .env
   const app = createWebPanel(db)
   const adminApp = createAdminPanel(db)
   app.route('/', adminApp)
-  const bindHost = process.env['BIND_HOST'] ?? '0.0.0.0'
+  const bindHost = process.env['BIND_HOST'] ?? '127.0.0.1'
   serve({ fetch: app.fetch, port: PORT, hostname: bindHost }, () => {
     console.log(`[salones-wa] web panel listening on ${bindHost}:${PORT}`)
     // R3: Never log the token value — just confirm it's set
@@ -52,8 +65,7 @@ async function main() {
 
     const instance = getInstance(salon.id)
     if (!instance) {
-      console.warn(`[salones-wa] no Baileys instance for salon ${salon.id}`)
-      return
+      throw new Error(`[salones-wa] no Baileys instance for salon ${salon.id} — send aborted`)
     }
     await instance.sendMessage(toPhone, text)
   }

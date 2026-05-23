@@ -10,10 +10,19 @@ import { createWebPanel } from './web/panel.js'
 import { createAdminPanel } from './web/admin.js'
 import { registerCrons } from './crons/index.js'
 import { initBaileysForSalon, getInstance } from './bot/baileys-manager.js'
+import qrcodeTerminal from 'qrcode-terminal'
 
 const PORT = parseInt(process.env['PORT'] ?? '8085')
 const SESSIONS_DIR = process.env['SESSIONS_DIR'] ?? './data/sessions'
 const DB_PATH = process.env['DB_PATH'] ?? './data/salones.db'
+
+// P0-1: Hard-fail at startup if ADMIN_TOKEN is missing or too short
+const ADMIN_TOKEN = process.env['ADMIN_TOKEN']
+if (!ADMIN_TOKEN || ADMIN_TOKEN.length < 16) {
+  console.error('[salones-wa] FATAL: ADMIN_TOKEN env var must be set and at least 16 chars long.')
+  console.error('[salones-wa] Generate one with: node -e "console.log(require(\'crypto\').randomBytes(24).toString(\'hex\'))"')
+  process.exit(1)
+}
 
 async function main() {
   console.log('[salones-wa] starting...')
@@ -23,12 +32,16 @@ async function main() {
   console.log('[salones-wa] DB ready')
 
   // ─── Web panel + Admin (Hono) ────────────────────────────────────────
+  // Bind: 0.0.0.0 for direct public access during pre-production testing.
+  // TODO (C1): switch to '127.0.0.1' + Caddy reverse-proxy before go-live.
   const app = createWebPanel(db)
   const adminApp = createAdminPanel(db)
   app.route('/', adminApp)
-  serve({ fetch: app.fetch, port: PORT }, () => {
-    console.log(`[salones-wa] web panel listening on :${PORT}`)
-    console.log(`[salones-wa] admin panel at /admin?token=${process.env['ADMIN_TOKEN'] ?? 'changeme'}`)
+  const bindHost = process.env['BIND_HOST'] ?? '0.0.0.0'
+  serve({ fetch: app.fetch, port: PORT, hostname: bindHost }, () => {
+    console.log(`[salones-wa] web panel listening on ${bindHost}:${PORT}`)
+    // R3: Never log the token value — just confirm it's set
+    console.log(`[salones-wa] admin panel at /admin?token=<set, ${ADMIN_TOKEN!.length} chars>`)
   })
 
   // ─── Crons ───────────────────────────────────────────────────────────
@@ -60,8 +73,9 @@ async function main() {
         sessionsDir: SESSIONS_DIR,
         db,
         onQR: (salonId, qr) => {
-          console.log(`[salones-wa] QR for salon ${salonId} — scan with WA`)
-          // qrcode-terminal would render here in production
+          console.log(`[salones-wa] QR for salon ${salonId} — scan with WhatsApp:`)
+          // W8: Actually render the QR code in the terminal
+          qrcodeTerminal.generate(qr, { small: true })
         },
       },
       salon.id,

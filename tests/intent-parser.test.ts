@@ -1,0 +1,132 @@
+import { describe, it, expect } from 'vitest'
+import { parseIntent } from '../src/bot/intent-parser.js'
+
+describe('parseIntent', () => {
+  describe('book', () => {
+    it('recognizes "quiero cita para corte"', () => {
+      const r = parseIntent('quiero cita para corte')
+      expect(r.type).toBe('book')
+    })
+    it('extracts service from message', () => {
+      const r = parseIntent('quiero agendar una cita para manicure')
+      expect(r.type).toBe('book')
+      if (r.type === 'book') expect(r.service).toBe('manicure')
+    })
+    it('recognizes "hola quiero cita"', () => {
+      const r = parseIntent('hola quiero cita')
+      expect(r.type).toBe('book')
+    })
+    it('recognizes "necesito reservar"', () => {
+      const r = parseIntent('necesito reservar un lugar')
+      expect(r.type).toBe('book')
+    })
+    it('extracts day hint from date', () => {
+      const r = parseIntent('quiero cita para el sábado')
+      expect(r.type).toBe('book')
+      if (r.type === 'book') expect(r.date?.toLowerCase()).toContain('sábado')
+    })
+    it('extracts "mañana" as date', () => {
+      const r = parseIntent('Hola quisiera cita para mañana')
+      expect(r.type).toBe('book')
+      if (r.type === 'book') expect(r.date?.toLowerCase()).toBe('mañana')
+    })
+  })
+
+  describe('cancel', () => {
+    it('recognizes "cancelar mi cita"', () => {
+      const r = parseIntent('quiero cancelar mi cita')
+      expect(r.type).toBe('cancel')
+    })
+    it('recognizes "no puedo ir"', () => {
+      const r = parseIntent('no puedo ir mañana')
+      expect(r.type).toBe('cancel')
+    })
+    it('recognizes "cancelar" standalone', () => {
+      const r = parseIntent('cancelar')
+      expect(r.type).toBe('cancel')
+    })
+    it('recognizes "CANCELAR" (uppercase)', () => {
+      const r = parseIntent('CANCELAR')
+      expect(r.type).toBe('cancel')
+    })
+  })
+
+  describe('confirm', () => {
+    it('recognizes "sí"', () => {
+      const r = parseIntent('sí')
+      expect(r.type).toBe('confirm')
+    })
+    it('recognizes "si" (without accent)', () => {
+      const r = parseIntent('si')
+      expect(r.type).toBe('confirm')
+    })
+    it('recognizes "confirmo"', () => {
+      const r = parseIntent('confirmo')
+      expect(r.type).toBe('confirm')
+    })
+    it('recognizes "dale"', () => {
+      const r = parseIntent('dale')
+      expect(r.type).toBe('confirm')
+    })
+    it('recognizes "ok"', () => {
+      const r = parseIntent('ok')
+      expect(r.type).toBe('confirm')
+    })
+  })
+
+  describe('opt_out', () => {
+    it('recognizes "no me mandes mensajes"', () => {
+      const r = parseIntent('no me mandes mensajes')
+      expect(r.type).toBe('opt_out')
+    })
+    it('recognizes "STOP"', () => {
+      const r = parseIntent('STOP')
+      expect(r.type).toBe('opt_out')
+    })
+    it('recognizes "darme de baja"', () => {
+      const r = parseIntent('quiero darme de baja')
+      expect(r.type).toBe('opt_out')
+    })
+  })
+
+  describe('query_appointment', () => {
+    it('recognizes "cuándo tengo mi cita"', () => {
+      const r = parseIntent('cuándo tengo mi cita?')
+      expect(r.type).toBe('query_appointment')
+    })
+    it('recognizes "a qué hora es mi cita"', () => {
+      const r = parseIntent('a qué hora es mi cita')
+      expect(r.type).toBe('query_appointment')
+    })
+  })
+
+  describe('reactivation context', () => {
+    it('maps "sí" to reactivation_yes in reactivation context', () => {
+      const r = parseIntent('sí', 'reactivation')
+      expect(r.type).toBe('reactivation_yes')
+    })
+    it('maps "no gracias" to reactivation_no', () => {
+      const r = parseIntent('no gracias', 'reactivation')
+      expect(r.type).toBe('reactivation_no')
+    })
+    it('maps "no" to reactivation_no', () => {
+      const r = parseIntent('no', 'reactivation')
+      expect(r.type).toBe('reactivation_no')
+    })
+    it('maps "quiero tinte" to reactivation_yes (contains affirmative)', () => {
+      const r = parseIntent('quiero tinte', 'reactivation')
+      expect(r.type).toBe('reactivation_yes')
+    })
+  })
+
+  describe('unknown', () => {
+    it('returns unknown for unrecognized text', () => {
+      const r = parseIntent('jajajaja qué onda')
+      expect(r.type).toBe('unknown')
+    })
+    it('includes raw text in unknown intent', () => {
+      const r = parseIntent('algo raro')
+      if (r.type === 'unknown') expect(r.raw).toBe('algo raro')
+    })
+  })
+})

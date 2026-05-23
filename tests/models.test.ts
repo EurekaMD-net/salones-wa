@@ -1,0 +1,364 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { initDb, resetDbSingleton } from '../src/db/database.js'
+import {
+  createSalon,
+  addService,
+  upsertContact,
+  createAppointment,
+  cancelAppointment,
+  completePassedAppointments,
+  getNextAppointmentForContact,
+  getUpcomingAppointmentsFor24h,
+  getUpcomingAppointmentsFor2h,
+  markReminded24h,
+  markReminded2h,
+  getDormantContacts,
+  updateDormantFlags,
+  createCampaign,
+  hasRecentCampaign,
+  getCampaignStats,
+  getSalonByToken,
+  getSalonByPhone,
+} from '../src/db/models.js'
+import type Database from 'better-sqlite3'
+
+let db: Database.Database
+
+beforeEach(() => {
+  db = initDb(':memory:')
+})
+
+afterEach(() => {
+  resetDbSingleton()
+})
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function now() { return Math.floor(Date.now() / 1000) }
+function hoursFromNow(h: number) { return now() + h * 3600 }
+
+function makeSalon(phone = '+5255000001') {
+  return createSalon(db, { name: 'Salón Test', phone })
+}
+
+function makeContact(salon_id: string, phone = '+5255100001') {
+  return upsertContact(db, { salon_id, phone, name: 'Clienta Test' })
+}
+
+function makeAppointment(salon_id: string, contact_id: string, startOffset = 25) {
+  const starts_at = hoursFromNow(startOffset)
+  const ends_at = starts_at + 3600
+  return createAppointment(db, { salon_id, contact_id, starts_at, ends_at })
+}
+
+// ─── Salons ───────────────────────────────────────────────────────────────────
+
+describe('createSalon', () => {
+  it('creates a salon with a token', () => {
+    const s = makeSalon()
+    expect(s.id).toBeTruthy()
+    expect(s.token).toBeTruthy()
+    expect(s.name).toBe('Salón Test')
+    expect(s.active).toBe(1)
+  })
+
+  it('token is a uuid-like string', () => {
+    const s = makeSalon()
+    expect(s.token).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it('throws on duplicate phone', () => {
+    makeSalon('+5255000001')
+    expect(() => makeSalon('+5255000001')).toThrow()
+  })
+})
+
+describe('getSalonByToken', () => {
+  it('returns salon by valid token', () => {
+    const s = makeSalon()
+    const found = getSalonByToken(db, s.token)
+    expect(found?.id).toBe(s.id)
+  })
+
+  it('returns null for invalid token', () => {
+    expect(getSalonByToken(db, 'bad-token')).toBeNull()
+  })
+})
+
+describe('getSalonByPhone', () => {
+  it('returns salon by phone', () => {
+    const s = makeSalon()
+    const found = getSalonByPhone(db, s.phone)
+    expect(found?.id).toBe(s.id)
+  })
+})
+
+// ─── Services ────────────────────────────────────────────────────────────────
+
+describe('addService', () => {
+  it('creates service for a salon', () => {
+    const salon = makeSalon()
+    const svc = addService(db, { salon_id: salon.id, name: 'Corte', duration_min: 45, price: 150 })
+    expect(svc.name).toBe('Corte')
+    expect(svc.duration_min).toBe(45)
+    expect(svc.price).toBe(150)
+  })
+})
+
+// ─── Contacts ────────────────────────────────────────────────────────────────
+
+describe('upsertContact', () => {
+  it('creates a new contact', () => {
+    const salon = makeSalon()
+    const c = upsertContact(db, { salon_id: salon.id, phone: '+5255100001', name: 'Ana' })
+    expect(c.name).toBe('Ana')
+    expect(c.visit_count).toBe(0)
+  })
+
+  it('returns existing contact on duplicate', () => {
+    const salon = makeSalon()
+    const c1 = upsertContact(db, { salon_id: salon.id, phone: '+5255100001' })
+    const c2 = upsertContact(db, { salon_id: salon.id, phone: '+5255100001' })
+    expect(c1.id).toBe(c2.id)
+  })
+
+  it('updates name if not set on existing contact', () => {
+    const salon = makeSalon()
+    upsertContact(db, { salon_id: salon.id, phone: '+5255100001' })
+    const c2 = upsertContact(db, { salon_id: salon.id, phone: '+5255100001', name: 'María' })
+    expect(c2.name).toBe('María')
+  })
+
+  it('same phone on different salons are distinct contacts', () => {
+    const s1 = makeSalon('+5255000001')
+    const s2 = makeSalon('+5255000002')
+    const c1 = upsertContact(db, { salon_id: s1.id, phone: '+5255100001' })
+    const c2 = upsertContact(db, { salon_id: s2.id, phone: '+5255100001' })
+    expect(c1.id).not.toBe(c2.id)
+  })
+})
+
+// ─── Appointments ─────────────────────────────────────────────────────────────
+
+describe('createAppointment', () => {
+  it('creates an appointment with confirmed status', () => {
+    const salon = makeSalon()
+    const contact = makeContact(salon.id)
+    const appt = makeAppointment(salon.id, contact.id, 25)
+    expect(appt.status).toBe('confirmed')
+    expect(appt.reminded_24h).toBe(0)
+    expect(appt.reminded_2h).toBe(0)
+  })
+})
+
+describe('cancelAppointment', () => {
+  it('marks appointment as cancelled', () => {
+    const salon = makeSalon()
+    const contact = makeContact(salon.id)
+    const appt = makeAppointment(salon.id, contact.id)
+    cancelAppointment(db, appt.id)
+    const updated = db.prepare('SELECT * FROM appointments WHERE id = ?').get(appt.id) as { status: string }
+    expect(updated.status).toBe('cancelled')
+  })
+})
+
+describe('getNextAppointmentForContact', () => {
+  it('returns next confirmed appointment', () => {
+    const salon = makeSalon()
+    const contact = makeContact(salon.id)
+    const appt = makeAppointment(salon.id, contact.id, 48)
+    const next = getNextAppointmentForContact(db, contact.id)
+    expect(next?.id).toBe(appt.id)
+  })
+
+  it('returns null if no upcoming appointments', () => {
+    const salon = makeSalon()
+    const contact = makeContact(salon.id)
+    expect(getNextAppointmentForContact(db, contact.id)).toBeNull()
+  })
+
+  it('ignores cancelled appointments', () => {
+    const salon = makeSalon()
+    const contact = makeContact(salon.id)
+    const appt = makeAppointment(salon.id, contact.id, 48)
+    cancelAppointment(db, appt.id)
+    expect(getNextAppointmentForContact(db, contact.id)).toBeNull()
+  })
+})
+
+describe('getUpcomingAppointmentsFor24h', () => {
+  it('returns appointments in 23-25h window', () => {
+    const salon = makeSalon()
+    const contact = makeContact(salon.id)
+    // appointment in 24h window
+    makeAppointment(salon.id, contact.id, 24)
+    const results = getUpcomingAppointmentsFor24h(db)
+    expect(results.length).toBeGreaterThan(0)
+  })
+
+  it('does not return already-reminded appointments', () => {
+    const salon = makeSalon()
+    const contact = makeContact(salon.id)
+    const appt = makeAppointment(salon.id, contact.id, 24)
+    markReminded24h(db, appt.id)
+    const results = getUpcomingAppointmentsFor24h(db)
+    expect(results.find((a: { id: string }) => a.id === appt.id)).toBeUndefined()
+  })
+
+  it('does not return appointments outside window (e.g. 1h away)', () => {
+    const salon = makeSalon()
+    const contact = makeContact(salon.id)
+    makeAppointment(salon.id, contact.id, 1) // 1h from now — outside 23-25h window
+    const results = getUpcomingAppointmentsFor24h(db)
+    expect(results.length).toBe(0)
+  })
+})
+
+describe('getUpcomingAppointmentsFor2h', () => {
+  it('returns appointments in 1.5-3h window', () => {
+    const salon = makeSalon()
+    const contact = makeContact(salon.id)
+    makeAppointment(salon.id, contact.id, 2)
+    const results = getUpcomingAppointmentsFor2h(db)
+    expect(results.length).toBeGreaterThan(0)
+  })
+
+  it('does not return already-reminded appointments', () => {
+    const salon = makeSalon()
+    const contact = makeContact(salon.id)
+    const appt = makeAppointment(salon.id, contact.id, 2)
+    markReminded2h(db, appt.id)
+    const results = getUpcomingAppointmentsFor2h(db)
+    expect(results.find((a: { id: string }) => a.id === appt.id)).toBeUndefined()
+  })
+})
+
+describe('completePassedAppointments', () => {
+  it('marks past confirmed appointments as completed', () => {
+    const salon = makeSalon()
+    const contact = makeContact(salon.id)
+    // Appointment in the past
+    const starts_at = now() - 7200
+    const ends_at = now() - 3600
+    const appt = createAppointment(db, { salon_id: salon.id, contact_id: contact.id, starts_at, ends_at })
+
+    const count = completePassedAppointments(db)
+    expect(count).toBeGreaterThan(0)
+
+    const updated = db.prepare('SELECT * FROM appointments WHERE id = ?').get(appt.id) as { status: string }
+    expect(updated.status).toBe('completed')
+  })
+
+  it('does not touch future appointments', () => {
+    const salon = makeSalon()
+    const contact = makeContact(salon.id)
+    const appt = makeAppointment(salon.id, contact.id, 48) // future
+    completePassedAppointments(db)
+    const updated = db.prepare('SELECT * FROM appointments WHERE id = ?').get(appt.id) as { status: string }
+    expect(updated.status).toBe('confirmed')
+  })
+})
+
+// ─── Dormant contacts ─────────────────────────────────────────────────────────
+
+describe('getDormantContacts', () => {
+  it('returns contacts with visit_count >= 1 and last_visit > 30 days ago', () => {
+    const salon = makeSalon()
+    const contact = upsertContact(db, { salon_id: salon.id, phone: '+5255100001' })
+    // Set visit_count=1 and last_visit = 40 days ago
+    const fortyDaysAgo = now() - 40 * 86400
+    db.prepare('UPDATE contacts SET visit_count = 1, last_visit = ? WHERE id = ?')
+      .run(fortyDaysAgo, contact.id)
+
+    const dormants = getDormantContacts(db, salon.id)
+    expect(dormants.find(c => c.id === contact.id)).toBeTruthy()
+  })
+
+  it('excludes contacts with visit_count = 0', () => {
+    const salon = makeSalon()
+    upsertContact(db, { salon_id: salon.id, phone: '+5255100002' })
+    // visit_count defaults to 0
+    const dormants = getDormantContacts(db, salon.id)
+    expect(dormants.length).toBe(0)
+  })
+
+  it('excludes contacts with active upcoming appointment', () => {
+    const salon = makeSalon()
+    const contact = upsertContact(db, { salon_id: salon.id, phone: '+5255100003' })
+    const fortyDaysAgo = now() - 40 * 86400
+    db.prepare('UPDATE contacts SET visit_count = 1, last_visit = ? WHERE id = ?')
+      .run(fortyDaysAgo, contact.id)
+    makeAppointment(salon.id, contact.id, 48) // has future appointment
+    const dormants = getDormantContacts(db, salon.id)
+    expect(dormants.find(c => c.id === contact.id)).toBeUndefined()
+  })
+
+  it('excludes opted-out contacts', () => {
+    const salon = makeSalon()
+    const contact = upsertContact(db, { salon_id: salon.id, phone: '+5255100004' })
+    const fortyDaysAgo = now() - 40 * 86400
+    db.prepare('UPDATE contacts SET visit_count = 1, last_visit = ?, opt_out = 1 WHERE id = ?')
+      .run(fortyDaysAgo, contact.id)
+    const dormants = getDormantContacts(db, salon.id)
+    expect(dormants.find(c => c.id === contact.id)).toBeUndefined()
+  })
+})
+
+describe('updateDormantFlags', () => {
+  it('updates dormant flag for qualifying contacts', () => {
+    const salon = makeSalon()
+    const contact = upsertContact(db, { salon_id: salon.id, phone: '+5255100001' })
+    const fortyDaysAgo = now() - 40 * 86400
+    db.prepare('UPDATE contacts SET visit_count = 1, last_visit = ? WHERE id = ?')
+      .run(fortyDaysAgo, contact.id)
+
+    const changes = updateDormantFlags(db)
+    expect(changes).toBeGreaterThan(0)
+
+    const updated = db.prepare('SELECT dormant FROM contacts WHERE id = ?').get(contact.id) as { dormant: number }
+    expect(updated.dormant).toBe(1)
+  })
+})
+
+// ─── Campaigns ────────────────────────────────────────────────────────────────
+
+describe('createCampaign / hasRecentCampaign', () => {
+  it('creates a campaign', () => {
+    const salon = makeSalon()
+    const contact = makeContact(salon.id)
+    const cam = createCampaign(db, { salon_id: salon.id, contact_id: contact.id })
+    expect(cam.type).toBe('reactivation')
+    expect(cam.responded).toBe(0)
+    expect(cam.booked).toBe(0)
+  })
+
+  it('hasRecentCampaign returns true after sending', () => {
+    const salon = makeSalon()
+    const contact = makeContact(salon.id)
+    createCampaign(db, { salon_id: salon.id, contact_id: contact.id })
+    expect(hasRecentCampaign(db, contact.id, 30)).toBe(true)
+  })
+
+  it('hasRecentCampaign returns false if no campaign', () => {
+    const salon = makeSalon()
+    const contact = makeContact(salon.id)
+    expect(hasRecentCampaign(db, contact.id, 30)).toBe(false)
+  })
+})
+
+describe('getCampaignStats', () => {
+  it('returns totals, responded, booked', () => {
+    const salon = makeSalon()
+    const c1 = makeContact(salon.id, '+5255100001')
+    const c2 = upsertContact(db, { salon_id: salon.id, phone: '+5255100002' })
+    const cam1 = createCampaign(db, { salon_id: salon.id, contact_id: c1.id })
+    const cam2 = createCampaign(db, { salon_id: salon.id, contact_id: c2.id })
+    db.prepare('UPDATE campaigns SET responded = 1, booked = 1 WHERE id = ?').run(cam1.id)
+    db.prepare('UPDATE campaigns SET responded = 1 WHERE id = ?').run(cam2.id)
+
+    const stats = getCampaignStats(db, salon.id)
+    expect(stats.total).toBe(2)
+    expect(stats.responded).toBe(2)
+    expect(stats.booked).toBe(1)
+  })
+})

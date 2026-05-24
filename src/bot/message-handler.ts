@@ -21,42 +21,9 @@ import {
   markCampaignResponded,
   markCampaignBooked,
 } from "../db/models.js";
+import { findAvailableSlots } from "./slot-finder.js";
 
-/** Available slot generation — naive impl for MVP (real salons configure real slots) */
-function generateDemoSlots(
-  count = 3,
-): Array<{ starts_at: number; ends_at: number; label: string }> {
-  const slots = [];
-  const now = new Date();
-  // Round up to next full hour
-  const base = new Date(now);
-  base.setMinutes(0, 0, 0);
-  base.setHours(base.getHours() + 2); // start from 2h from now
-
-  for (let i = 0; i < count; i++) {
-    const start = new Date(base);
-    start.setDate(start.getDate() + Math.floor(i / 2));
-    start.setHours(i % 2 === 0 ? 10 : 14);
-    const end = new Date(start);
-    end.setHours(end.getHours() + 1);
-
-    const label = start.toLocaleString("es-MX", {
-      timeZone: "America/Mexico_City",
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-
-    slots.push({
-      starts_at: Math.floor(start.getTime() / 1000),
-      ends_at: Math.floor(end.getTime() / 1000),
-      label,
-    });
-  }
-  return slots;
-}
+const DEFAULT_SLOT_DURATION_MIN = 60;
 
 export interface HandleResult {
   reply: string | null; // null = no reply needed
@@ -253,13 +220,24 @@ export async function handleInboundMessage(
     const service = next.service_id
       ? services.find((s) => s.id === next.service_id)
       : undefined;
-    const slots = generateDemoSlots(3);
+    // Slot duration inherits from the original appointment's service when
+    // present; falls back to the default if the appointment had no service
+    // (legacy / orphaned rows). Reschedule preserves the original
+    // service_id (audit W4) so the new appointment doesn't silently shift
+    // to a different service.
+    const durationMin = service?.duration_min ?? DEFAULT_SLOT_DURATION_MIN;
+    const slots = findAvailableSlots(db, salon_id, durationMin);
+    if (slots.length === 0) {
+      return {
+        reply: Messages.offerReschedule(next, [], service),
+      };
+    }
     conversationState.set(
       {
         step: "awaiting_reschedule_slot_selection",
         salon_id,
         contact_id: contact.id,
-        pending_service_id: next.service_id ?? services[0]?.id,
+        pending_service_id: next.service_id ?? undefined,
         pending_slots: slots,
         pending_reschedule_old_id: next.id,
         updated_at: Date.now(),
@@ -269,7 +247,7 @@ export async function handleInboundMessage(
     return {
       reply: Messages.offerReschedule(
         next,
-        slots.map((s) => s.label),
+        slots.map((s: { label: string }) => s.label),
         service,
       ),
     };
@@ -297,14 +275,23 @@ export async function handleInboundMessage(
   // ─── Book ─────────────────────────────────────────────────────────────
   if (intent.type === "book" || intent.type === "reactivation_yes") {
     const services = getServices(db, salon_id);
-    const slots = generateDemoSlots(3);
+    // MVP picks the first service (services[0]); service_id-specific picking
+    // is a follow-up. Slot duration uses that service's duration.
+    const pickedService = services[0];
+    const durationMin =
+      pickedService?.duration_min ?? DEFAULT_SLOT_DURATION_MIN;
+    const slots = findAvailableSlots(db, salon_id, durationMin);
+
+    if (slots.length === 0) {
+      return { reply: Messages.offerSlots([]) };
+    }
 
     conversationState.set(
       {
         step: "awaiting_slot_selection",
         salon_id,
         contact_id: contact.id,
-        pending_service_id: services[0]?.id,
+        pending_service_id: pickedService?.id,
         pending_slots: slots,
         campaign_id: state?.campaign_id,
         updated_at: Date.now(),
@@ -312,7 +299,9 @@ export async function handleInboundMessage(
       fromPhone,
     );
 
-    return { reply: Messages.offerSlots(slots.map((s) => s.label)) };
+    return {
+      reply: Messages.offerSlots(slots.map((s: { label: string }) => s.label)),
+    };
   }
 
   // ─── Unknown ──────────────────────────────────────────────────────────

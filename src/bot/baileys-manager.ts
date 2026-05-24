@@ -117,20 +117,25 @@ export async function initBaileysForSalon(
 
   sock.ev.on("creds.update", saveCreds);
 
-  // W1 (audit 2026-05-24): pairing-code request must wait for the WA server
-  // to finish the noise-protocol handshake before sendNode is safe. The
-  // FIRST `qr` emit is the right signal — earlier triggers (e.g.
-  // `connection === "connecting"`) fail with "Connection Closed /
-  // Precondition Required" because the WS isn't ready for iq nodes.
-  // Pin the callback locally (W3) so a later options mutation can't trip
-  // the non-null assertion at .then time.
-  // The pairing code expires ~60s WA-side; in production observation WA's
-  // QR event also fires every ~60s, not the ~20s the Baileys docs suggest.
-  // To avoid windowing where a code is already expired by the time the
-  // operator reads it, refresh on EVERY QR emit. `pairingRequestInFlight`
-  // prevents concurrent requests racing each other (Baileys API + network
-  // round-trip is non-zero).
+  // Pairing-code request flow:
+  // 1. Must wait for the WA server to finish the noise-protocol handshake
+  //    before sendNode is safe (W1 audit 2026-05-24). The FIRST `qr` emit
+  //    is the right signal — earlier triggers (e.g. `connection ===
+  //    "connecting"`) fail with "Connection Closed / Precondition Required"
+  //    because the WS isn't ready for iq nodes.
+  // 2. Pin the callback locally (W3) so a later options mutation can't trip
+  //    the non-null assertion at .then time.
+  // 3. THROTTLE regen to once per ~50s. Each call to requestPairingCode
+  //    INVALIDATES the previous code on WA's backend — Baileys' QR cycle
+  //    fires every ~20s in practice, but WA codes expire ~60s. Without
+  //    throttling, by the time the operator types code X, we've already
+  //    issued code X+1 and WA marks X dead. Symptom: "No se pudo vincular
+  //    el dispositivo" on every attempt despite codes appearing fresh.
+  //    Time-based throttle keeps each code valid for ~50s of WA-side
+  //    expiry minus a small safety margin.
+  const PAIRING_REGEN_INTERVAL_MS = 50_000;
   let pairingRequestInFlight = false;
+  let lastPairingRequestAt = 0;
   const onPairingCodeCb = options.onPairingCode;
 
   sock.ev.on("connection.update", (update) => {
@@ -146,19 +151,25 @@ export async function initBaileysForSalon(
       !state.creds.registered &&
       onPairingCodeCb
     ) {
-      pairingRequestInFlight = true;
-      sock
-        .requestPairingCode(salonPhone)
-        .then((code) => onPairingCodeCb(salonId, code))
-        .catch((err) =>
-          console.error(
-            `[baileys] [${salonPhone}] pairing-code request failed:`,
-            err,
-          ),
-        )
-        .finally(() => {
-          pairingRequestInFlight = false;
-        });
+      const now = Date.now();
+      if (now - lastPairingRequestAt >= PAIRING_REGEN_INTERVAL_MS) {
+        lastPairingRequestAt = now;
+        pairingRequestInFlight = true;
+        sock
+          .requestPairingCode(salonPhone)
+          .then((code) => onPairingCodeCb(salonId, code))
+          .catch((err) => {
+            // Reset both gates so a future qr event can retry
+            lastPairingRequestAt = 0;
+            console.error(
+              `[baileys] [${salonPhone}] pairing-code request failed:`,
+              err,
+            );
+          })
+          .finally(() => {
+            pairingRequestInFlight = false;
+          });
+      }
     }
 
     if (connection === "close") {

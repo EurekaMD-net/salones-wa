@@ -302,7 +302,7 @@ SESSIONS_DIR=./data/sessions
 
 1. **Navegar a** `http://<vps-ip>:8085/admin?token=TU_ADMIN_TOKEN`
 2. Click en **"+ Nuevo salón"**
-3. Llenar nombre, teléfono WA (ej: `5215512345678`) y servicios iniciales
+3. Llenar nombre, **WhatsApp del salón** (la línea que la dueña ya usa con sus clientas — ej: `525555555555`) y servicios iniciales. NO es un número aparte del bot: el bot se conecta como dispositivo vinculado a este WhatsApp existente del salón.
 4. Al crear → el sistema muestra la **URL del panel para la dueña**
 5. Compartir esa URL con la dueña (se accede desde cualquier celular, sin app)
 6. **Reiniciar el servicio** (`systemctl restart salones-wa`) para que Baileys cargue el nuevo salón

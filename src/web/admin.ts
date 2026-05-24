@@ -8,11 +8,11 @@
  * Never share the admin URL publicly. Rotate after any exposure.
  */
 
-import { Hono } from 'hono'
-import type { Context } from 'hono'
-import { bodyLimit } from 'hono/body-limit'
-import { timingSafeEqual } from 'crypto'
-import type Database from 'better-sqlite3'
+import { Hono } from "hono";
+import type { Context } from "hono";
+import { bodyLimit } from "hono/body-limit";
+import { timingSafeEqual } from "crypto";
+import type Database from "better-sqlite3";
 import {
   getAllSalons,
   getSalonById,
@@ -23,85 +23,91 @@ import {
   createService,
   updateService,
   deleteService,
-} from '../db/models.js'
+} from "../db/models.js";
 
 /** Escape HTML to prevent XSS from DB strings rendered in templates */
 function escapeHtml(str: string): string {
   return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function getAdminToken(): string {
-  const token = process.env['ADMIN_TOKEN']
-  if (!token) throw new Error('[salones-wa] ADMIN_TOKEN env var is required but not set')
-  if (token.length < 16) throw new Error('[salones-wa] ADMIN_TOKEN must be at least 16 characters')
-  return token
+  const token = process.env["ADMIN_TOKEN"];
+  if (!token)
+    throw new Error("[salones-wa] ADMIN_TOKEN env var is required but not set");
+  if (token.length < 16)
+    throw new Error("[salones-wa] ADMIN_TOKEN must be at least 16 characters");
+  return token;
 }
 
 /** Constant-time token comparison to prevent timing attacks */
 function safeTokenCompare(a: string, b: string): boolean {
   if (a.length !== b.length) {
     // Still do a dummy compare to avoid length-based timing leak
-    timingSafeEqual(Buffer.from(a), Buffer.alloc(a.length))
-    return false
+    timingSafeEqual(Buffer.from(a), Buffer.alloc(a.length));
+    return false;
   }
-  return timingSafeEqual(Buffer.from(a), Buffer.from(b))
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
 // Per-IP brute-force protection (in-memory, resets on restart)
-const authAttempts = new Map<string, { count: number; resetAt: number }>()
-const MAX_AUTH_ATTEMPTS = 5
-const AUTH_WINDOW_MS = 60_000
+const authAttempts = new Map<string, { count: number; resetAt: number }>();
+const MAX_AUTH_ATTEMPTS = 5;
+const AUTH_WINDOW_MS = 60_000;
 
 function checkRateLimit(ip: string): boolean {
-  const now = Date.now()
-  const record = authAttempts.get(ip)
+  const now = Date.now();
+  const record = authAttempts.get(ip);
   if (!record || record.resetAt < now) {
-    authAttempts.set(ip, { count: 0, resetAt: now + AUTH_WINDOW_MS })
-    return true // OK
+    authAttempts.set(ip, { count: 0, resetAt: now + AUTH_WINDOW_MS });
+    return true; // OK
   }
-  return record.count < MAX_AUTH_ATTEMPTS
+  return record.count < MAX_AUTH_ATTEMPTS;
 }
 
 function recordFailedAttempt(ip: string): void {
-  const now = Date.now()
-  const record = authAttempts.get(ip)
+  const now = Date.now();
+  const record = authAttempts.get(ip);
   if (!record || record.resetAt < now) {
-    authAttempts.set(ip, { count: 1, resetAt: now + AUTH_WINDOW_MS })
+    authAttempts.set(ip, { count: 1, resetAt: now + AUTH_WINDOW_MS });
   } else {
-    record.count++
+    record.count++;
   }
 }
 
 /** Validate phone: digits only, 10-15 chars (international format) */
 function isValidPhone(phone: string): boolean {
-  return /^\d{10,15}$/.test(phone)
+  return /^\d{10,15}$/.test(phone);
 }
 
 /** Check CSRF: Origin or Referer must match the request Host */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function checkCsrf(c: Context<any, any, any>): boolean {
-  const host = c.req.header('host')
-  if (!host) return false
-  const origin = c.req.header('origin')
-  const referer = c.req.header('referer')
+  const host = c.req.header("host");
+  if (!host) return false;
+  const origin = c.req.header("origin");
+  const referer = c.req.header("referer");
   if (origin) {
     try {
-      const originHost = new URL(origin).host
-      return originHost === host
-    } catch { return false }
+      const originHost = new URL(origin).host;
+      return originHost === host;
+    } catch {
+      return false;
+    }
   }
   if (referer) {
     try {
-      const refererHost = new URL(referer).host
-      return refererHost === host
-    } catch { return false }
+      const refererHost = new URL(referer).host;
+      return refererHost === host;
+    } catch {
+      return false;
+    }
   }
-  return false
+  return false;
 }
 
 // ─── Shared layout helpers ───────────────────────────────────────────────────
@@ -151,7 +157,7 @@ const css = `
   .empty { padding: 40px; text-align: center; color: #aaa; }
   hr { border: none; border-top: 1px solid #eee; margin: 20px 0; }
   h3 { font-size: 0.95rem; font-weight: 600; margin-bottom: 12px; color: #333; }
-`
+`;
 
 function layout(title: string, body: string, adminToken: string): string {
   return `<!DOCTYPE html>
@@ -174,51 +180,62 @@ function layout(title: string, body: string, adminToken: string): string {
     ${body}
   </div>
 </body>
-</html>`
+</html>`;
 }
 
 // ─── Router factory ──────────────────────────────────────────────────────────
 
 export function createAdminPanel(db: Database.Database): Hono {
-  const app = new Hono()
+  const app = new Hono();
 
   // W7: Body size limit on all admin routes (DoS protection)
-  app.use('/admin/*', bodyLimit({ maxSize: 32 * 1024 })) // 32 KB
+  app.use("/admin/*", bodyLimit({ maxSize: 32 * 1024 })); // 32 KB
 
   // Auth guard — all /admin routes
-  app.use('/admin/*', async (c, next) => {
-    const ip = c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown'
+  app.use("/admin/*", async (c, next) => {
+    const ip =
+      c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
 
     if (!checkRateLimit(ip)) {
-      return c.text('Demasiados intentos. Espera 1 minuto.', 429)
+      return c.text("Demasiados intentos. Espera 1 minuto.", 429);
     }
 
-    const token = c.req.query('token') ?? ''
-    let adminToken: string
+    const token = c.req.query("token") ?? "";
+    let adminToken: string;
     try {
-      adminToken = getAdminToken()
+      adminToken = getAdminToken();
     } catch {
-      return c.text('Configuración del servidor incompleta. Contacta al administrador.', 503)
+      return c.text(
+        "Configuración del servidor incompleta. Contacta al administrador.",
+        503,
+      );
     }
 
     if (!safeTokenCompare(token, adminToken)) {
-      recordFailedAttempt(ip)
-      return c.text('Token de administrador requerido o inválido\n\nUsa: /admin?token=TU_ADMIN_TOKEN', 401)
+      recordFailedAttempt(ip);
+      return c.text(
+        "Token de administrador requerido o inválido\n\nUsa: /admin?token=TU_ADMIN_TOKEN",
+        401,
+      );
     }
-    await next()
-  })
+    await next();
+  });
 
   // ─── GET /admin — lista de salones ──────────────────────────────────
-  app.get('/admin', c => {
-    const adminToken = c.req.query('token')!
-    const salons = getAllSalons(db)
+  app.get("/admin", (c) => {
+    const adminToken = c.req.query("token")!;
+    const salons = getAllSalons(db);
 
-    const rows = salons.map(s => {
-      const created = new Date(s.created_at * 1000).toLocaleDateString('es-MX', { timeZone: 'America/Mexico_City' })
-      const statusBadge = s.active
-        ? '<span class="badge-active">Activo</span>'
-        : '<span class="badge-inactive">Inactivo</span>'
-      return `<tr>
+    const rows = salons
+      .map((s) => {
+        const created = new Date(s.created_at * 1000).toLocaleDateString(
+          "es-MX",
+          { timeZone: "America/Mexico_City" },
+        );
+        const statusBadge = s.active
+          ? '<span class="badge-active">Activo</span>'
+          : '<span class="badge-inactive">Inactivo</span>';
+        return `<tr>
         <td><strong>${escapeHtml(s.name)}</strong></td>
         <td style="font-family:monospace;font-size:0.85rem">${escapeHtml(s.phone)}</td>
         <td>${statusBadge}</td>
@@ -226,13 +243,14 @@ export function createAdminPanel(db: Database.Database): Hono {
         <td class="actions">
           <a href="/admin/salones/${s.id}?token=${adminToken}" class="btn btn-secondary btn-sm">Editar</a>
           <form method="POST" action="/admin/salones/${s.id}/toggle?token=${adminToken}" style="display:inline">
-            <button type="submit" class="btn btn-sm ${s.active ? 'btn-danger' : 'btn-primary'}">
-              ${s.active ? 'Desactivar' : 'Activar'}
+            <button type="submit" class="btn btn-sm ${s.active ? "btn-danger" : "btn-primary"}">
+              ${s.active ? "Desactivar" : "Activar"}
             </button>
           </form>
         </td>
-      </tr>`
-    }).join('')
+      </tr>`;
+      })
+      .join("");
 
     const body = `
       <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding:0">
@@ -241,22 +259,25 @@ export function createAdminPanel(db: Database.Database): Hono {
       </div>
       <div class="card">
         <div class="card-body" style="padding:0">
-          ${salons.length === 0
-            ? '<div class="empty">No hay salones registrados aún.<br><a href="/admin/salones/new?token=' + adminToken + '">Crea el primero →</a></div>'
-            : `<table>
-                <thead><tr><th>Nombre</th><th>Teléfono WA</th><th>Estado</th><th>Alta</th><th>Acciones</th></tr></thead>
+          ${
+            salons.length === 0
+              ? '<div class="empty">No hay salones registrados aún.<br><a href="/admin/salones/new?token=' +
+                adminToken +
+                '">Crea el primero →</a></div>'
+              : `<table>
+                <thead><tr><th>Nombre</th><th>WhatsApp del salón</th><th>Estado</th><th>Alta</th><th>Acciones</th></tr></thead>
                 <tbody>${rows}</tbody>
                </table>`
           }
         </div>
-      </div>`
+      </div>`;
 
-    return c.html(layout('Salones', body, adminToken))
-  })
+    return c.html(layout("Salones", body, adminToken));
+  });
 
   // ─── GET /admin/salones/new — formulario crear ────────────────────────
-  app.get('/admin/salones/new', c => {
-    const adminToken = c.req.query('token')!
+  app.get("/admin/salones/new", (c) => {
+    const adminToken = c.req.query("token")!;
 
     const body = `
       <div style="margin-bottom:16px">
@@ -271,9 +292,9 @@ export function createAdminPanel(db: Database.Database): Hono {
               <input class="form-control" name="name" required placeholder="Ej: Salón Rosita" />
             </div>
             <div class="form-group">
-              <label>Número de WhatsApp *</label>
-              <input class="form-control" name="phone" required placeholder="521XXXXXXXXXX" />
-              <div class="form-hint">Incluye código de país sin +. Ejemplo: 521 para MX celular → 5215512345678</div>
+              <label>WhatsApp del salón * <small style="font-weight:normal;color:#666">(la línea que ya usan las clientas)</small></label>
+              <input class="form-control" name="phone" required placeholder="525555555555" />
+              <div class="form-hint">El número de WhatsApp que la dueña ya tiene activo y que sus clientas conocen. La dueña lo va a "vincular" como dispositivo desde su teléfono — Baileys se conecta ahí, no es un número aparte. Solo dígitos sin +. Ejemplo MX celular: 525555555555 (12 dígitos).</div>
             </div>
             <hr>
             <h3>Servicios iniciales</h3>
@@ -301,44 +322,67 @@ export function createAdminPanel(db: Database.Database): Hono {
             </div>
           </form>
         </div>
-      </div>`
+      </div>`;
 
-    return c.html(layout('Nuevo salón', body, adminToken))
-  })
+    return c.html(layout("Nuevo salón", body, adminToken));
+  });
 
   // ─── POST /admin/salones — crear ─────────────────────────────────────
-  app.post('/admin/salones', async c => {
-    if (!checkCsrf(c)) return c.text('Solicitud inválida', 403)
-    const adminToken = c.req.query('token')!
-    const form = await c.req.formData()
+  app.post("/admin/salones", async (c) => {
+    if (!checkCsrf(c)) return c.text("Solicitud inválida", 403);
+    const adminToken = c.req.query("token")!;
+    const form = await c.req.formData();
 
-    const name = (form.get('name') as string | null)?.trim() ?? ''
-    const phone = (form.get('phone') as string | null)?.trim() ?? ''
+    const name = (form.get("name") as string | null)?.trim() ?? "";
+    const phone = (form.get("phone") as string | null)?.trim() ?? "";
 
     if (!name || !phone) {
-      return c.html(layout('Error', '<div class="alert" style="background:#fee;border:1px solid #fcc;color:#c0392b">Nombre y teléfono son requeridos.</div><a href="/admin/salones/new?token=' + adminToken + '" class="btn btn-secondary">← Volver</a>', adminToken), 400)
+      return c.html(
+        layout(
+          "Error",
+          '<div class="alert" style="background:#fee;border:1px solid #fcc;color:#c0392b">Nombre y teléfono son requeridos.</div><a href="/admin/salones/new?token=' +
+            adminToken +
+            '" class="btn btn-secondary">← Volver</a>',
+          adminToken,
+        ),
+        400,
+      );
     }
 
     if (!isValidPhone(phone)) {
-      return c.html(layout('Error', '<div class="alert" style="background:#fee;border:1px solid #fcc;color:#c0392b">Teléfono inválido. Usa solo dígitos, formato 52XXXXXXXXXX (10-15 dígitos).</div><a href="/admin/salones/new?token=' + adminToken + '" class="btn btn-secondary">← Volver</a>', adminToken), 400)
+      return c.html(
+        layout(
+          "Error",
+          '<div class="alert" style="background:#fee;border:1px solid #fcc;color:#c0392b">Teléfono inválido. Usa solo dígitos, formato 52XXXXXXXXXX (10-15 dígitos).</div><a href="/admin/salones/new?token=' +
+            adminToken +
+            '" class="btn btn-secondary">← Volver</a>',
+          adminToken,
+        ),
+        400,
+      );
     }
 
-    const salon = createSalon(db, { name, phone })
+    const salon = createSalon(db, { name, phone });
 
     // Create services (array fields)
-    const svcNames = form.getAll('svc_name[]') as string[]
-    const svcDurs = form.getAll('svc_dur[]') as string[]
-    const svcPrices = form.getAll('svc_price[]') as string[]
+    const svcNames = form.getAll("svc_name[]") as string[];
+    const svcDurs = form.getAll("svc_dur[]") as string[];
+    const svcPrices = form.getAll("svc_price[]") as string[];
 
     for (let i = 0; i < svcNames.length; i++) {
-      const svcName = svcNames[i]?.trim()
-      if (!svcName) continue
-      const dur = parseInt(svcDurs[i] ?? '30', 10) || 30
-      const price = parseFloat(svcPrices[i] ?? '') || undefined
-      createService(db, { salon_id: salon.id, name: svcName, duration_min: dur, price })
+      const svcName = svcNames[i]?.trim();
+      if (!svcName) continue;
+      const dur = parseInt(svcDurs[i] ?? "30", 10) || 30;
+      const price = parseFloat(svcPrices[i] ?? "") || undefined;
+      createService(db, {
+        salon_id: salon.id,
+        name: svcName,
+        duration_min: dur,
+        price,
+      });
     }
 
-    const panelUrl = `http://localhost:8085/panel/dashboard?token=${salon.token}`
+    const panelUrl = `http://localhost:8085/panel/dashboard?token=${salon.token}`;
     const body = `
       <div class="alert alert-success">✅ Salón <strong>${escapeHtml(salon.name)}</strong> creado exitosamente.</div>
       <div class="card">
@@ -352,28 +396,32 @@ export function createAdminPanel(db: Database.Database): Hono {
             <a href="/admin?token=${adminToken}" class="btn btn-primary">← Volver a lista</a>
           </div>
         </div>
-      </div>`
+      </div>`;
 
-    return c.html(layout('Salón creado', body, adminToken))
-  })
+    return c.html(layout("Salón creado", body, adminToken));
+  });
 
   // ─── GET /admin/salones/:id — detalle/edición ─────────────────────────
-  app.get('/admin/salones/:id', c => {
-    const adminToken = c.req.query('token')!
-    const salon = getSalonById(db, c.req.param('id'))
-    if (!salon) return c.text('Salón no encontrado', 404)
+  app.get("/admin/salones/:id", (c) => {
+    const adminToken = c.req.query("token")!;
+    const salon = getSalonById(db, c.req.param("id"));
+    if (!salon) return c.text("Salón no encontrado", 404);
 
-    const services = getServices(db, salon.id)
-    const panelUrl = `http://localhost:8085/panel/dashboard?token=${salon.token}`
+    const services = getServices(db, salon.id);
+    const panelUrl = `http://localhost:8085/panel/dashboard?token=${salon.token}`;
 
-    const serviceRows = services.map(s => `
+    const serviceRows = services
+      .map(
+        (s) => `
       <div class="service-row">
         <span class="svc-name">${escapeHtml(s.name)}</span>
-        <span class="svc-meta">${s.duration_min} min · ${s.price != null ? '$' + s.price : 'Sin precio'}</span>
+        <span class="svc-meta">${s.duration_min} min · ${s.price != null ? "$" + s.price : "Sin precio"}</span>
         <form method="POST" action="/admin/salones/${salon.id}/services/${s.id}/delete?token=${adminToken}" style="display:inline">
           <button type="submit" class="btn btn-danger btn-sm">Desactivar servicio</button>
         </form>
-      </div>`).join('')
+      </div>`,
+      )
+      .join("");
 
     const body = `
       <div style="margin-bottom:16px">
@@ -384,7 +432,7 @@ export function createAdminPanel(db: Database.Database): Hono {
       <div class="card" style="margin-bottom:16px">
         <div class="card-header">
           <h2>${escapeHtml(salon.name)}</h2>
-          <span class="${salon.active ? 'badge-active' : 'badge-inactive'}">${salon.active ? 'Activo' : 'Inactivo'}</span>
+          <span class="${salon.active ? "badge-active" : "badge-inactive"}">${salon.active ? "Activo" : "Inactivo"}</span>
         </div>
         <div class="card-body">
           <form method="POST" action="/admin/salones/${salon.id}/edit?token=${adminToken}">
@@ -394,7 +442,7 @@ export function createAdminPanel(db: Database.Database): Hono {
                 <input class="form-control" name="name" value="${escapeHtml(salon.name)}" required />
               </div>
               <div class="form-group">
-                <label>Número WhatsApp (solo dígitos, ej: 52XXXXXXXXXX)</label>
+                <label>WhatsApp del salón <small style="font-weight:normal;color:#666">(la línea de la dueña, solo dígitos sin +)</small></label>
                 <input class="form-control" name="phone" value="${escapeHtml(salon.phone)}" required pattern="\d{10,15}" title="Solo dígitos, 10-15 caracteres" />
               </div>
             </div>
@@ -446,84 +494,85 @@ export function createAdminPanel(db: Database.Database): Hono {
         <div class="card-header"><h2>Acciones</h2></div>
         <div class="card-body">
           <form method="POST" action="/admin/salones/${salon.id}/toggle?token=${adminToken}">
-            <button type="submit" class="btn ${salon.active ? 'btn-danger' : 'btn-primary'}">
-              ${salon.active ? '⏸ Desactivar salón' : '▶ Activar salón'}
+            <button type="submit" class="btn ${salon.active ? "btn-danger" : "btn-primary"}">
+              ${salon.active ? "⏸ Desactivar salón" : "▶ Activar salón"}
             </button>
           </form>
           <p style="margin-top:8px;font-size:0.8rem;color:#999">
-            ${salon.active ? 'Desactivar detiene el bot WA para este salón.' : 'Activar permite al bot responder mensajes de este salón.'}
+            ${salon.active ? "Desactivar detiene el bot WA para este salón." : "Activar permite al bot responder mensajes de este salón."}
           </p>
         </div>
-      </div>`
+      </div>`;
 
-    return c.html(layout(salon.name, body, adminToken))
-  })
+    return c.html(layout(salon.name, body, adminToken));
+  });
 
   // ─── POST /admin/salones/:id/edit — guardar edición ──────────────────
-  app.post('/admin/salones/:id/edit', async c => {
-    if (!checkCsrf(c)) return c.text('Solicitud inválida', 403)
-    const adminToken = c.req.query('token')!
-    const salon = getSalonById(db, c.req.param('id'))
-    if (!salon) return c.text('Salón no encontrado', 404)
+  app.post("/admin/salones/:id/edit", async (c) => {
+    if (!checkCsrf(c)) return c.text("Solicitud inválida", 403);
+    const adminToken = c.req.query("token")!;
+    const salon = getSalonById(db, c.req.param("id"));
+    if (!salon) return c.text("Salón no encontrado", 404);
 
-    const form = await c.req.formData()
-    const name = (form.get('name') as string | null)?.trim()
-    const phone = (form.get('phone') as string | null)?.trim()
+    const form = await c.req.formData();
+    const name = (form.get("name") as string | null)?.trim();
+    const phone = (form.get("phone") as string | null)?.trim();
 
     if (phone && !isValidPhone(phone)) {
-      return c.text('Teléfono inválido. Solo dígitos, 10-15 caracteres.', 400)
+      return c.text("Teléfono inválido. Solo dígitos, 10-15 caracteres.", 400);
     }
 
     updateSalon(db, salon.id, {
       ...(name ? { name } : {}),
       ...(phone ? { phone } : {}),
-    })
+    });
 
-    return c.redirect(`/admin/salones/${salon.id}?token=${adminToken}&saved=1`)
-  })
+    return c.redirect(`/admin/salones/${salon.id}?token=${adminToken}&saved=1`);
+  });
 
   // ─── POST /admin/salones/:id/toggle — activar/desactivar ─────────────
-  app.post('/admin/salones/:id/toggle', c => {
-    if (!checkCsrf(c)) return c.text('Solicitud inválida', 403)
-    const adminToken = c.req.query('token')!
-    const salon = getSalonById(db, c.req.param('id'))
-    if (!salon) return c.text('Salón no encontrado', 404)
+  app.post("/admin/salones/:id/toggle", (c) => {
+    if (!checkCsrf(c)) return c.text("Solicitud inválida", 403);
+    const adminToken = c.req.query("token")!;
+    const salon = getSalonById(db, c.req.param("id"));
+    if (!salon) return c.text("Salón no encontrado", 404);
 
-    setSalonActive(db, salon.id, !salon.active)
-    return c.redirect(`/admin?token=${adminToken}`)
-  })
+    setSalonActive(db, salon.id, !salon.active);
+    return c.redirect(`/admin?token=${adminToken}`);
+  });
 
   // ─── POST /admin/salones/:id/services — agregar servicio ─────────────
-  app.post('/admin/salones/:id/services', async c => {
-    if (!checkCsrf(c)) return c.text('Solicitud inválida', 403)
-    const adminToken = c.req.query('token')!
-    const salon = getSalonById(db, c.req.param('id'))
-    if (!salon) return c.text('Salón no encontrado', 404)
+  app.post("/admin/salones/:id/services", async (c) => {
+    if (!checkCsrf(c)) return c.text("Solicitud inválida", 403);
+    const adminToken = c.req.query("token")!;
+    const salon = getSalonById(db, c.req.param("id"));
+    if (!salon) return c.text("Salón no encontrado", 404);
 
-    const form = await c.req.formData()
-    const name = (form.get('name') as string | null)?.trim() ?? ''
-    const duration_min = parseInt(form.get('duration_min') as string ?? '30', 10) || 30
-    const priceRaw = form.get('price') as string | null
-    const price = priceRaw ? (parseFloat(priceRaw) || undefined) : undefined
+    const form = await c.req.formData();
+    const name = (form.get("name") as string | null)?.trim() ?? "";
+    const duration_min =
+      parseInt((form.get("duration_min") as string) ?? "30", 10) || 30;
+    const priceRaw = form.get("price") as string | null;
+    const price = priceRaw ? parseFloat(priceRaw) || undefined : undefined;
 
     if (name) {
-      createService(db, { salon_id: salon.id, name, duration_min, price })
+      createService(db, { salon_id: salon.id, name, duration_min, price });
     }
 
-    return c.redirect(`/admin/salones/${salon.id}?token=${adminToken}`)
-  })
+    return c.redirect(`/admin/salones/${salon.id}?token=${adminToken}`);
+  });
 
   // ─── POST /admin/salones/:id/services/:svcId/delete ──────────────────
-  app.post('/admin/salones/:id/services/:svcId/delete', c => {
-    if (!checkCsrf(c)) return c.text('Solicitud inválida', 403)
-    const adminToken = c.req.query('token')!
-    const salon = getSalonById(db, c.req.param('id'))
-    if (!salon) return c.text('Salón no encontrado', 404)
+  app.post("/admin/salones/:id/services/:svcId/delete", (c) => {
+    if (!checkCsrf(c)) return c.text("Solicitud inválida", 403);
+    const adminToken = c.req.query("token")!;
+    const salon = getSalonById(db, c.req.param("id"));
+    if (!salon) return c.text("Salón no encontrado", 404);
 
     // W10: enforce salon scoping — only delete services belonging to this salon
-    deleteService(db, c.req.param('svcId'), salon.id)
-    return c.redirect(`/admin/salones/${salon.id}?token=${adminToken}`)
-  })
+    deleteService(db, c.req.param("svcId"), salon.id);
+    return c.redirect(`/admin/salones/${salon.id}?token=${adminToken}`);
+  });
 
-  return app
+  return app;
 }

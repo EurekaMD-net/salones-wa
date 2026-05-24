@@ -77,6 +77,7 @@ export async function initBaileysForSalon(
     useMultiFileAuthState,
     DisconnectReason,
     fetchLatestBaileysVersion,
+    Browsers,
   } = await import("@whiskeysockets/baileys");
   const { Boom } = await import("@hapi/boom");
 
@@ -93,7 +94,13 @@ export async function initBaileysForSalon(
     // in the onQR callback AND prefer pairing-code linking. Leaving it true caused
     // a deprecation warning + raced with our own renderer.
     printQRInTerminal: false,
-    browser: ["SalonesWA", "Chrome", "1.0"],
+    // 2026-05-24: switched from custom ['SalonesWA','Chrome','1.0'] to the
+    // recognized WA Web signature. Custom browser strings are sometimes
+    // treated as anti-spam-suspicious by WA's pairing-code endpoint;
+    // Browsers.ubuntu('Chrome') mimics a real Ubuntu+Chrome WA Web client
+    // that WA's backend recognizes. Common Baileys community fix when
+    // pairing-code linking fails from VPS / data-center IPs.
+    browser: Browsers.ubuntu("Chrome"),
     // Minimize logging noise
     logger: {
       level: "silent",
@@ -181,6 +188,14 @@ export async function initBaileysForSalon(
         console.log(
           `[baileys] [${salonPhone}] reconnecting (code=${statusCode ?? "?"}, reason=${reason})...`,
         );
+        // 2026-05-24: must delete the zombie instance from the map BEFORE
+        // the setTimeout fires, otherwise initBaileysForSalon's early-return
+        // at instances.has(salonId) returns the now-dead instance. This was
+        // load-bearing for code 515 (restartRequired): WA auths the device,
+        // emits 515, our reconnect needed to actually re-init Baileys with
+        // the persisted (registered) creds — without this delete, Baileys
+        // stays disconnected forever after a successful link.
+        instances.delete(salonId);
         setTimeout(
           () => initBaileysForSalon(options, salonId, salonPhone),
           5000,

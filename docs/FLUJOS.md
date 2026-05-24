@@ -23,14 +23,28 @@
 **Trigger:** Clienta escribe primero con intent `BOOK`
 
 ```
-Estado 1 — Captura de servicio
-──────────────────────────────
-Clienta:  "Hola, quiero cita para corte"
-Bot:      "¡Hola! 👋 ¿Para cuándo? Tenemos disponible:
+Estado 1 — Captura de servicio (si el salón tiene varios)
+─────────────────────────────────────────────────────────
+Clienta:  "Hola, quiero cita para corte"   ← hint "corte" → match Corte
+Bot:      "Para Corte tenemos disponible:
            1️⃣ Sábado 28 de mayo — 10:00am
-           2️⃣ Sábado 28 de mayo — 2:00pm
-           3️⃣ Lunes 30 de mayo — 9:00am
-           Responde 1, 2 o 3 para apartar tu lugar"
+           2️⃣ Lunes 30 de mayo — 10:00am
+           3️⃣ Martes 31 de mayo — 10:00am
+           4️⃣ Otra fecha — dime cuándo te queda
+           Responde con el número ✅"
+
+[Si la clienta NO mencionó servicio y el salón tiene varios]
+Clienta:  "Quiero cita"
+Bot:      "¿Qué servicio necesitas?
+           1️⃣ Corte
+           2️⃣ Tinte
+           3️⃣ Peinado
+           Responde con el número o el nombre del servicio."
+Clienta:  "Tinte"  o  "2"   ← match por nombre o índice
+→ Continúa al estado 2 con Tinte como servicio
+
+[Si el salón solo tiene 1 servicio]
+→ Auto-selección, salta al estado 2 directamente
 
 Estado 2 — Selección de slot
 ──────────────────────────────
@@ -38,21 +52,65 @@ Clienta:  "1"
 Bot:      "✅ Listo! Quedas agendada:
            📅 Sábado 28 de mayo a las 10:00am
            💇‍♀️ Servicio: Corte
-           Te recordaré mañana para confirmar. ¿Cambias algo?"
-
-[Si el nombre no está registrado]
-Bot:      "✅ Quedas agendada! ¿Cómo te llamas para anotarte? 😊"
-Clienta:  "Carmen"
-Bot:      "Listo Carmen 💕 Tu cita es el sábado 28 a las 10:00am para corte.
-           Te recordaré 24h antes."
+           Te recordaré 24h antes. ¡Hasta entonces! 💇‍♀️"
 ```
 
 **Reglas:**
 
-- Mostrar máximo 3 slots disponibles más próximos
+- Mostrar 3 slots + 1 opción "Otra fecha" (Flujo 1c)
 - Un slot = franja de `service.duration_min` minutos dentro del horario del salón
-- Si no hay slots en los próximos 7 días → "No tenemos disponibilidad esta semana, ¿te aviso cuando haya lugar?"
-- Si la clienta ya tiene una cita confirmada → preguntar si quiere cancelar la anterior
+- Los slots respetan: ≥24h desde ahora, horario configurado del salón (default Mon-Sat 9-19), sin solapamientos con citas confirmadas
+- Cada slot ofrecido en un día distinto (variedad sobre densidad)
+- Si no hay disponibilidad en 14 días → "En este momento no tenemos lugares disponibles..."
+- Si la clienta abandona ("mejor lo dejo así", "olvidalo") → bot libera el estado y cierra cordialmente
+
+---
+
+## Flujo 1c — Propuesta de horario por la clienta
+
+**Trigger:** Clienta responde con `4` (la opción "Otra fecha") al ver los slots ofrecidos.
+
+```
+Clienta:  "4"
+Bot:      "¿Qué día y hora te queda mejor? 📅
+           Por ejemplo: viernes 4pm, mañana 11am, sábado a las 5"
+
+Clienta:  "viernes 4pm"
+
+[Caso 1 — disponible]
+Bot:      "Te puedo agendar el viernes 30 de mayo, 04:00 p.m. para Corte. ¿Confirmas? Responde SÍ"
+Clienta:  "sí"
+Bot:      "✅ ¡Listo! Tu cita es el viernes 30 de mayo a las 04:00 p.m. para Corte."
+
+[Caso 2 — ocupado, hay alternativas]
+Bot:      "Esa hora ya está apartada 🙈. Te puedo ofrecer:
+           1️⃣ Viernes 30 — 3:00pm
+           2️⃣ Viernes 30 — 5:00pm
+           3️⃣ Sábado 31 — 4:00pm
+           Responde con el número o dime otra fecha."
+
+[Caso 3 — muy próxima (<24h)]
+Bot:      "Esa fecha ya pasó o es muy próxima. Necesito al menos 24 horas de anticipación."
+
+[Caso 4 — fuera de horario]
+Bot:      "Ese día/hora estamos cerrados 🏪. Nuestro horario es lunes a sábado de 9am a 7pm."
+
+[Caso 5 — no se entiende la fecha]
+Bot:      "No pude entender bien la fecha 😅. Intenta así:
+           • viernes 4pm
+           • mañana 11am
+           • el sábado a las 5"
+```
+
+**Reglas:**
+
+- Parser soporta: `hoy / mañana / pasado mañana`, días de la semana (`lunes`–`domingo`), `próximo viernes`, formatos de hora `4pm / 4:30pm / 16:00 / a las 5 / 5 de la tarde / 11 de la mañana`
+- Día y hora SIEMPRE se interpretan en zona horaria del salón (default `America/Mexico_City`)
+- "12 de la noche" → 00:00 (no 12:00). "12 de la mañana" → 00:00 (idiom mexicano de medianoche)
+- Hora ambigua (1–7 sin am/pm) → asume PM (clientas suelen pedir por la tarde)
+- Re-validación de disponibilidad ANTES de confirmar (anti-race contra otras clientas reservando el mismo slot)
+- Si tras "¿Confirmas?" la clienta responde algo que NO es SÍ → vuelve a estado de captura de fecha
+- Mismo flujo se activa desde Flujo 4b (reagendar) — si la propuesta colisiona y la clienta elige una alternativa, se preserva el reschedule (cancela la anterior + crea la nueva)
 
 ---
 

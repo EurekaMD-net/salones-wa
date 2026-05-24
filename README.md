@@ -10,7 +10,7 @@
 | Métrica                  | Valor                                                                 |
 | ------------------------ | --------------------------------------------------------------------- |
 | **Fase**                 | **En producción** — systemd activo, listo para conectar número WA     |
-| **Tests**                | **126 / 126 ✅**                                                      |
+| **Tests**                | **177 / 177 ✅**                                                      |
 | **Typecheck**            | 0 errores                                                             |
 | **Último commit**        | 2026-05-23                                                            |
 | **Servicio**             | `salones-wa` (systemd, usuario dedicado, bind `127.0.0.1:8085`)       |
@@ -100,9 +100,11 @@ salones-wa/
 ├── tests/
 │   ├── intent-parser.test.ts       # 39 tests
 │   ├── models.test.ts              # 33 tests  (includes P0-2 idempotence pin)
-│   ├── message-handler.test.ts     # 21 tests
+│   ├── message-handler.test.ts     # 32 tests
 │   ├── conversation-state.test.ts  # 6 tests
-│   └── web-panel.test.ts           # 9 tests
+│   ├── web-panel.test.ts           # 9 tests
+│   ├── slot-finder.test.ts         # 16 tests  (working-hours + conflicts + alternatives)
+│   └── datetime-parser.test.ts     # 24 tests  (Spanish day+time parser + audit C1/W2 pins)
 │                                   # (admin.test.ts colocado en src/web/)
 ├── docs/
 │   ├── MVP-PLAN.md                 # Plan completo del MVP

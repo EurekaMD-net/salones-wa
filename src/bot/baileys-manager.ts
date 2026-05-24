@@ -221,7 +221,21 @@ export async function initBaileysForSalon(
       const from = msg.key.remoteJid;
       if (!from) continue;
 
-      const phone = from.replace("@s.whatsapp.net", "").replace("@g.us", "");
+      // 2026-05-24: WA's multi-device protocol uses opaque @lid identifiers
+      // for many senders instead of phone-format JIDs. Baileys 7 surfaces
+      // the phone-format JID (when available) on key.remoteJidAlt. Prefer
+      // it for contact identification — otherwise we store an unusable LID
+      // string in contacts.phone, breaking reminders/reactivation crons
+      // that need real phone numbers to fan out outbound messages.
+      // The original `from` (full JID) is kept for sendMessage replies
+      // because Baileys routes both LID and phone JIDs correctly.
+      const altJid = msg.key.remoteJidAlt;
+      const idJid =
+        altJid && altJid.endsWith("@s.whatsapp.net") ? altJid : from;
+      const phone = idJid
+        .replace("@s.whatsapp.net", "")
+        .replace("@g.us", "")
+        .replace("@lid", "");
       const text =
         msg.message?.conversation ??
         msg.message?.extendedTextMessage?.text ??

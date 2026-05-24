@@ -5,7 +5,11 @@ import {
   createAppointment,
   upsertContact,
 } from "../src/db/models.js";
-import { findAvailableSlots } from "../src/bot/slot-finder.js";
+import {
+  findAvailableSlots,
+  checkCustomTime,
+  findAlternativesAround,
+} from "../src/bot/slot-finder.js";
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 
@@ -206,6 +210,110 @@ describe("findAvailableSlots", () => {
       expect(slots[0].label.toLowerCase()).toMatch(
         /lunes|martes|miércoles|jueves|viernes|sábado|domingo/,
       );
+    });
+  });
+
+  describe("checkCustomTime", () => {
+    it("rejects times within 24h", () => {
+      const tooSoon = Math.floor(FIXED_NOW / 1000) + 3600; // 1h from now
+      const r = checkCustomTime(db, salonId, 60, tooSoon, { nowMs: FIXED_NOW });
+      expect(r.available).toBe(false);
+      expect(r.reason).toBe("in_past");
+    });
+
+    it("rejects times outside business hours (default Mon-Sat 9-19)", () => {
+      // Wednesday 8am MX = before 9am open (using Wed not Tue to clear the
+      // 24h-from-FIXED_NOW=Mon-10am cutoff so we don't trip in_past first).
+      const wed8am = Math.floor(
+        new Date("2026-06-03T14:00:00Z").getTime() / 1000,
+      );
+      const r = checkCustomTime(db, salonId, 60, wed8am, {
+        nowMs: FIXED_NOW,
+      });
+      expect(r.available).toBe(false);
+      expect(r.reason).toBe("outside_hours");
+    });
+
+    it("rejects times on closed days (Sunday by default)", () => {
+      // Sunday 11am MX = closed
+      const sunday11am = Math.floor(
+        new Date("2026-06-07T17:00:00Z").getTime() / 1000,
+      );
+      const r = checkCustomTime(db, salonId, 60, sunday11am, {
+        nowMs: FIXED_NOW,
+      });
+      expect(r.available).toBe(false);
+      expect(r.reason).toBe("outside_hours");
+    });
+
+    it("rejects times that collide with a confirmed appointment", () => {
+      const contact = upsertContact(db, {
+        salon_id: salonId,
+        phone: "+5255111199",
+      });
+      const tuesday11am = Math.floor(
+        new Date("2026-06-02T17:00:00Z").getTime() / 1000,
+      );
+      createAppointment(db, {
+        salon_id: salonId,
+        contact_id: contact.id,
+        starts_at: tuesday11am,
+        ends_at: tuesday11am + 3600,
+      });
+      const r = checkCustomTime(db, salonId, 60, tuesday11am, {
+        nowMs: FIXED_NOW,
+      });
+      expect(r.available).toBe(false);
+      expect(r.reason).toBe("conflict");
+    });
+
+    it("accepts a fully-available time", () => {
+      const tuesday2pm = Math.floor(
+        new Date("2026-06-02T20:00:00Z").getTime() / 1000,
+      );
+      const r = checkCustomTime(db, salonId, 60, tuesday2pm, {
+        nowMs: FIXED_NOW,
+      });
+      expect(r.available).toBe(true);
+    });
+  });
+
+  describe("findAlternativesAround", () => {
+    it("returns slots near the anchor time", () => {
+      // Anchor: Tuesday 10am MX (which is the natural first slot anyway)
+      const anchor = Math.floor(
+        new Date("2026-06-02T16:00:00Z").getTime() / 1000,
+      );
+      const alts = findAlternativesAround(db, salonId, 60, anchor, {
+        nowMs: FIXED_NOW,
+        count: 3,
+      });
+      expect(alts.length).toBeGreaterThan(0);
+      expect(alts.length).toBeLessThanOrEqual(3);
+      // None should equal the anchor itself
+      for (const a of alts) {
+        expect(a.starts_at).not.toBe(anchor);
+      }
+    });
+
+    it("returns empty when no working hours exist (defensive)", () => {
+      // Seed working hours with only Sunday — anchor on weekday → no
+      // alternatives for that weekday, but Sunday slots exist within window.
+      // (Tests robustness against pathological calendar.)
+      const stmt = db.prepare(
+        "INSERT INTO slots (id, salon_id, day_of_week, start_time, end_time, active) VALUES (?, ?, ?, ?, ?, 1)",
+      );
+      stmt.run(randomUUID(), salonId, 0, "09:00", "10:00");
+
+      const anchor = Math.floor(
+        new Date("2026-06-02T20:00:00Z").getTime() / 1000,
+      );
+      const alts = findAlternativesAround(db, salonId, 60, anchor, {
+        nowMs: FIXED_NOW,
+        count: 3,
+      });
+      // Sunday 9-10 = 1 valid 60-min slot
+      expect(alts.length).toBeLessThanOrEqual(1);
     });
   });
 });

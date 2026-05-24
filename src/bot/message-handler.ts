@@ -21,7 +21,12 @@ import {
   markCampaignResponded,
   markCampaignBooked,
 } from "../db/models.js";
-import { findAvailableSlots } from "./slot-finder.js";
+import {
+  findAvailableSlots,
+  findAlternativesAround,
+  checkCustomTime,
+} from "./slot-finder.js";
+import { parseSpanishDateTime } from "./datetime-parser.js";
 
 const DEFAULT_SLOT_DURATION_MIN = 60;
 
@@ -87,6 +92,8 @@ export async function handleInboundMessage(
   if (state?.step === "awaiting_slot_selection") {
     const slotNumber = parseInt(text.trim());
     const slots = state.pending_slots ?? [];
+    // The Nth+1 option is "Otra fecha" — route to custom-time flow.
+    const customOptionNumber = slots.length + 1;
 
     if (!isNaN(slotNumber) && slotNumber >= 1 && slotNumber <= slots.length) {
       const slot = slots[slotNumber - 1];
@@ -108,8 +115,22 @@ export async function handleInboundMessage(
 
       conversationState.clear(salon_id, fromPhone);
       return { reply: Messages.appointmentConfirmed(appt, service) };
+    } else if (slotNumber === customOptionNumber) {
+      conversationState.set(
+        {
+          step: "awaiting_custom_time",
+          salon_id,
+          contact_id: contact.id,
+          pending_service_id: state.pending_service_id,
+          custom_time_mode: "book",
+          campaign_id: state.campaign_id,
+          updated_at: Date.now(),
+        },
+        fromPhone,
+      );
+      return { reply: Messages.askCustomTime() };
     } else {
-      return { reply: Messages.askSlotNumber(slots.length) };
+      return { reply: Messages.askSlotNumber(customOptionNumber) };
     }
   }
 
@@ -121,6 +142,7 @@ export async function handleInboundMessage(
     const slotNumber = parseInt(text.trim());
     const slots = state.pending_slots ?? [];
     const oldId = state.pending_reschedule_old_id;
+    const customOptionNumber = slots.length + 1;
 
     if (
       !isNaN(slotNumber) &&
@@ -165,9 +187,238 @@ export async function handleInboundMessage(
           service,
         ),
       };
+    } else if (slotNumber === customOptionNumber && oldId) {
+      conversationState.set(
+        {
+          step: "awaiting_custom_time",
+          salon_id,
+          contact_id: contact.id,
+          pending_service_id: state.pending_service_id,
+          pending_reschedule_old_id: oldId,
+          custom_time_mode: "reschedule",
+          updated_at: Date.now(),
+        },
+        fromPhone,
+      );
+      return { reply: Messages.askCustomTime() };
     } else {
-      return { reply: Messages.askSlotNumber(slots.length) };
+      return { reply: Messages.askSlotNumber(customOptionNumber) };
     }
+  }
+
+  // ─── Custom-time: parse clienta's proposed time ──────────────────────
+  // Clienta picked "Otra fecha" and now sent the proposed day+time
+  // ("viernes 4pm", "mañana 11am", etc.). Parse → check availability →
+  // either ask for SÍ confirmation, propose alternatives, or ask to
+  // rephrase.
+  if (state?.step === "awaiting_custom_time") {
+    const proposed = parseSpanishDateTime(text, Date.now());
+    if (!proposed) {
+      return { reply: Messages.customTimeUnparseable() };
+    }
+    const services = getServices(db, salon_id);
+    const service = state.pending_service_id
+      ? services.find((s) => s.id === state.pending_service_id)
+      : undefined;
+    const durationMin = service?.duration_min ?? DEFAULT_SLOT_DURATION_MIN;
+    const proposedSec = Math.floor(proposed.getTime() / 1000);
+
+    const check = checkCustomTime(db, salon_id, durationMin, proposedSec);
+
+    if (check.available) {
+      const label = proposed.toLocaleString("es-MX", {
+        timeZone: "America/Mexico_City",
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      conversationState.set(
+        {
+          step: "awaiting_custom_time_confirm",
+          salon_id,
+          contact_id: contact.id,
+          pending_service_id: state.pending_service_id,
+          pending_reschedule_old_id: state.pending_reschedule_old_id,
+          pending_custom_start: proposedSec,
+          pending_custom_end: proposedSec + durationMin * 60,
+          pending_custom_label: label,
+          custom_time_mode: state.custom_time_mode,
+          campaign_id: state.campaign_id,
+          updated_at: Date.now(),
+        },
+        fromPhone,
+      );
+      return { reply: Messages.askConfirmCustomTime(label, service) };
+    }
+
+    // Not available — explain why + offer alternatives
+    if (check.reason === "in_past") {
+      return { reply: Messages.customTimeInPast() };
+    }
+    if (check.reason === "outside_hours") {
+      return { reply: Messages.customTimeOutsideHours() };
+    }
+    // conflict — find alternatives near the anchor
+    const alts = findAlternativesAround(
+      db,
+      salon_id,
+      durationMin,
+      proposedSec,
+      {
+        count: 3,
+      },
+    );
+    if (alts.length === 0) {
+      return { reply: Messages.customTimeUnavailable([]) };
+    }
+    // Audit W1 (2026-05-24): preserve reschedule semantics. If clienta
+    // came from RESCHEDULE → custom → conflict → alternatives, picking
+    // an alternative must SWAP (cancel-old + create-new), not start a
+    // fresh booking. Route back to the reschedule slot-selection step
+    // with old_id preserved.
+    const altStep =
+      state.custom_time_mode === "reschedule" && state.pending_reschedule_old_id
+        ? "awaiting_reschedule_slot_selection"
+        : "awaiting_slot_selection";
+    conversationState.set(
+      {
+        step: altStep,
+        salon_id,
+        contact_id: contact.id,
+        pending_service_id: state.pending_service_id,
+        pending_slots: alts,
+        pending_reschedule_old_id: state.pending_reschedule_old_id,
+        campaign_id: state.campaign_id,
+        updated_at: Date.now(),
+      },
+      fromPhone,
+    );
+    return {
+      reply: Messages.customTimeUnavailable(
+        alts.map((s: { label: string }) => s.label),
+      ),
+    };
+  }
+
+  // ─── Custom-time: confirm SÍ to book the proposed time ────────────────
+  if (state?.step === "awaiting_custom_time_confirm") {
+    if (intent.type !== "confirm") {
+      // Anything other than SÍ — treat as a new proposal: re-enter parse
+      conversationState.set(
+        {
+          step: "awaiting_custom_time",
+          salon_id,
+          contact_id: contact.id,
+          pending_service_id: state.pending_service_id,
+          pending_reschedule_old_id: state.pending_reschedule_old_id,
+          custom_time_mode: state.custom_time_mode,
+          campaign_id: state.campaign_id,
+          updated_at: Date.now(),
+        },
+        fromPhone,
+      );
+      return { reply: Messages.askCustomTime() };
+    }
+
+    const startSec = state.pending_custom_start;
+    const endSec = state.pending_custom_end;
+    if (!startSec || !endSec) {
+      // Defensive — shouldn't happen
+      conversationState.clear(salon_id, fromPhone);
+      return { reply: Messages.fallback() };
+    }
+
+    const services = getServices(db, salon_id);
+    const service = state.pending_service_id
+      ? services.find((s) => s.id === state.pending_service_id)
+      : undefined;
+    const durationMin = service?.duration_min ?? DEFAULT_SLOT_DURATION_MIN;
+
+    // Audit C2 (2026-05-24): re-check availability INSIDE the transaction
+    // to close the double-book race between "¿Confirmas?" and the
+    // clienta's SÍ. The seconds-to-minutes typing-time window let another
+    // clienta book the same slot via her own custom-time / BOOK flow.
+    // If now-conflicting: present alternatives instead of silent double-book.
+    const recheck = checkCustomTime(db, salon_id, durationMin, startSec);
+    if (!recheck.available) {
+      const alts = findAlternativesAround(db, salon_id, durationMin, startSec, {
+        count: 3,
+      });
+      // Drop the now-stale confirm state and offer fresh alternatives.
+      if (alts.length === 0) {
+        conversationState.clear(salon_id, fromPhone);
+        return { reply: Messages.customTimeUnavailable([]) };
+      }
+      // Preserve reschedule mode (W1) — if we came from reschedule, the
+      // alternatives must complete the swap, not start a fresh booking.
+      const altStep =
+        state.custom_time_mode === "reschedule" &&
+        state.pending_reschedule_old_id
+          ? "awaiting_reschedule_slot_selection"
+          : "awaiting_slot_selection";
+      conversationState.set(
+        {
+          step: altStep,
+          salon_id,
+          contact_id: contact.id,
+          pending_service_id: state.pending_service_id,
+          pending_slots: alts,
+          pending_reschedule_old_id: state.pending_reschedule_old_id,
+          campaign_id: state.campaign_id,
+          updated_at: Date.now(),
+        },
+        fromPhone,
+      );
+      return {
+        reply: Messages.customTimeUnavailable(
+          alts.map((s: { label: string }) => s.label),
+        ),
+      };
+    }
+
+    if (
+      state.custom_time_mode === "reschedule" &&
+      state.pending_reschedule_old_id
+    ) {
+      // Atomic: cancel old + create new at custom time
+      const oldId = state.pending_reschedule_old_id;
+      const old = getAppointmentById(db, oldId);
+      const tx = db.transaction(() => {
+        cancelAppointment(db, oldId);
+        return createAppointment(db, {
+          salon_id,
+          contact_id: contact.id,
+          service_id: state.pending_service_id,
+          starts_at: startSec,
+          ends_at: endSec,
+        });
+      });
+      const appt = tx();
+      conversationState.clear(salon_id, fromPhone);
+      return {
+        reply: Messages.appointmentRescheduled(
+          appt,
+          old?.starts_at ?? null,
+          service,
+        ),
+      };
+    }
+
+    // BOOK mode
+    const appt = createAppointment(db, {
+      salon_id,
+      contact_id: contact.id,
+      service_id: state.pending_service_id,
+      starts_at: startSec,
+      ends_at: endSec,
+    });
+    if (state.campaign_id) {
+      markCampaignBooked(db, state.campaign_id);
+    }
+    conversationState.clear(salon_id, fromPhone);
+    return { reply: Messages.appointmentConfirmed(appt, service) };
   }
 
   // ─── Reactivation yes/no ──────────────────────────────────────────────

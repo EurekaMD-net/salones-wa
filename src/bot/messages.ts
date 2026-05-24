@@ -39,7 +39,8 @@ export const Messages = {
       return "En este momento no tenemos lugares disponibles para esa fecha. ¿Te parece si te busco para otra fecha?";
     }
     const list = slots.map((s, i) => `${i + 1}️⃣ ${s}`).join("\n");
-    return `Tenemos disponible:\n${list}\n\nResponde con el número para apartar tu lugar ✅`;
+    const customOpt = `${slots.length + 1}️⃣ Otra fecha — dime cuándo te queda`;
+    return `Tenemos disponible:\n${list}\n${customOpt}\n\nResponde con el número ✅`;
   },
 
   appointmentConfirmed(appt: Appointment, service?: Service): string {
@@ -95,7 +96,8 @@ export const Messages = {
       return `Tu cita actual es el ${oldWhen}${svc}. En este momento no tenemos otros lugares disponibles. ¿La dejamos como está?`;
     }
     const list = slots.map((s, i) => `${i + 1}️⃣ ${s}`).join("\n");
-    return `Tu cita actual es el ${oldWhen}${svc}.\n¿Para cuándo la quieres mover?\n${list}\n\nResponde con el número. La cita anterior queda cancelada al confirmar la nueva.`;
+    const customOpt = `${slots.length + 1}️⃣ Otra fecha — dime cuándo te queda`;
+    return `Tu cita actual es el ${oldWhen}${svc}.\n¿Para cuándo la quieres mover?\n${list}\n${customOpt}\n\nResponde con el número. La cita anterior queda cancelada al confirmar la nueva.`;
   },
 
   appointmentRescheduled(
@@ -153,5 +155,35 @@ export const Messages = {
   // ─── Abandonment during slot selection — audit W3 fold ───────────────────
   flowAbandoned(): string {
     return "Está bien, dejamos tu cita como estaba 👍. Cuando quieras, escríbeme.";
+  },
+
+  // ─── Custom-time flow (4th option) ───────────────────────────────────────
+  askCustomTime(): string {
+    return "¿Qué día y hora te queda mejor? 📅\nPor ejemplo: *viernes 4pm*, *mañana 11am*, *sábado a las 5*";
+  },
+
+  customTimeUnparseable(): string {
+    return "No pude entender bien la fecha 😅. Intenta así:\n• *viernes 4pm*\n• *mañana 11am*\n• *el sábado a las 5*";
+  },
+
+  customTimeInPast(): string {
+    return "Esa fecha ya pasó o es muy próxima. Necesito al menos 24 horas de anticipación 🙏";
+  },
+
+  customTimeOutsideHours(): string {
+    return "Ese día/hora estamos cerrados 🏪. Nuestro horario es lunes a sábado de 9am a 7pm (puedes pedir otra hora).";
+  },
+
+  customTimeUnavailable(slots: string[]): string {
+    if (slots.length === 0) {
+      return "Esa hora no la tengo libre y no encontré alternativas cercanas. ¿Te parece otra fecha?";
+    }
+    const list = slots.map((s, i) => `${i + 1}️⃣ ${s}`).join("\n");
+    return `Esa hora ya está apartada 🙈. Te puedo ofrecer:\n${list}\n\nResponde con el número o dime otra fecha que te quede.`;
+  },
+
+  askConfirmCustomTime(label: string, service?: Service): string {
+    const svc = service ? ` para ${service.name}` : "";
+    return `Te puedo agendar el ${label}${svc}. ¿Confirmas? Responde *SÍ* para apartar.`;
   },
 };

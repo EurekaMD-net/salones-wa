@@ -10,6 +10,8 @@ export type ConversationStep =
   | "awaiting_date"
   | "awaiting_slot_selection"
   | "awaiting_reschedule_slot_selection"
+  | "awaiting_custom_time" // clienta chose "Otra fecha" — bot asked when
+  | "awaiting_custom_time_confirm" // bot offered the parsed time, clienta confirms
   | "awaiting_cancel_confirm"
   | "reactivation_sent"; // waiting for yes/no after reactivation outbound
 
@@ -25,6 +27,12 @@ export interface ConversationState {
   pending_cancel_id?: string;
   /** Pending appointment to replace when reschedule completes */
   pending_reschedule_old_id?: string;
+  /** Custom-time flow: candidate the bot proposed and is awaiting yes/no for */
+  pending_custom_start?: number; // unix seconds
+  pending_custom_end?: number;
+  pending_custom_label?: string;
+  /** Custom-time flow: whether this is a fresh BOOK or a RESCHEDULE swap */
+  custom_time_mode?: "book" | "reschedule";
   /** Campaign ID linked to reactivation */
   campaign_id?: string;
   updated_at: number;

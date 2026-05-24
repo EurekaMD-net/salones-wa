@@ -172,3 +172,127 @@ export function findAvailableSlots(
 
   return slots;
 }
+
+/** Why a requested custom time was rejected — useful for tailored replies. */
+export type CustomTimeRejection =
+  | "in_past" // before now + minHoursAhead
+  | "outside_hours" // outside the salon's working hours for that day
+  | "conflict"; // collides with an existing confirmed appointment
+
+export interface CustomTimeCheckResult {
+  available: boolean;
+  reason?: CustomTimeRejection;
+}
+
+/**
+ * Is the salon available for a service of `duration_min` starting at
+ * `requestedStartSec`? Applies the same rules as `findAvailableSlots`:
+ * 24h lookahead, working hours, no overlap with confirmed appointments.
+ */
+export function checkCustomTime(
+  db: Database.Database,
+  salon_id: string,
+  service_duration_min: number,
+  requestedStartSec: number,
+  options: { nowMs?: number; minHoursAhead?: number } = {},
+): CustomTimeCheckResult {
+  const nowMs = options.nowMs ?? Date.now();
+  const minHoursAhead = options.minHoursAhead ?? 24;
+  const earliestSec = Math.floor(nowMs / 1000) + minHoursAhead * 3600;
+
+  if (requestedStartSec < earliestSec) {
+    return { available: false, reason: "in_past" };
+  }
+
+  const endSec = requestedStartSec + service_duration_min * 60;
+
+  // Working hours check
+  const dbHours = db
+    .prepare(
+      "SELECT day_of_week, start_time, end_time FROM slots WHERE salon_id = ? AND active = 1",
+    )
+    .all(salon_id) as WorkingHourWindow[];
+  const workingHours = dbHours.length > 0 ? dbHours : DEFAULT_WORKING_HOURS;
+
+  const start = new Date(requestedStartSec * 1000);
+  const dow = start.getDay();
+  const windows = workingHours.filter((wh) => wh.day_of_week === dow);
+  if (windows.length === 0) {
+    return { available: false, reason: "outside_hours" };
+  }
+  const inHours = windows.some((wh) => {
+    const { h: oh, m: om } = parseHHMM(wh.start_time);
+    const { h: ch, m: cm } = parseHHMM(wh.end_time);
+    const dayStart = new Date(start);
+    dayStart.setHours(oh, om, 0, 0);
+    const dayEnd = new Date(start);
+    dayEnd.setHours(ch, cm, 0, 0);
+    return (
+      start.getTime() >= dayStart.getTime() &&
+      start.getTime() + service_duration_min * 60_000 <= dayEnd.getTime()
+    );
+  });
+  if (!inHours) {
+    return { available: false, reason: "outside_hours" };
+  }
+
+  // Conflict check
+  const conflict = db
+    .prepare(
+      "SELECT 1 FROM appointments WHERE salon_id = ? AND status = 'confirmed' " +
+        "AND starts_at < ? AND ends_at > ?",
+    )
+    .get(salon_id, endSec, requestedStartSec) as { 1: number } | undefined;
+  if (conflict) {
+    return { available: false, reason: "conflict" };
+  }
+
+  return { available: true };
+}
+
+/**
+ * Find alternative slots near `anchorSec` for when the clienta's requested
+ * custom time isn't available. Pulls a wider pool from `findAvailableSlots`
+ * (which returns at most one slot per day), then sorts by absolute time
+ * distance from `anchorSec` and takes the top N.
+ *
+ * Audit W4 (2026-05-24): the prior docstring claimed "same day, then
+ * adjacent days" which overstated what the code does. With the one-slot-
+ * per-day rule, same-day alternatives at a different hour are never
+ * surfaced. Future enhancement could pass a `preferTimeWithinDay` anchor
+ * down to `findAvailableSlots`. For the 3-option MVP UX this is acceptable.
+ */
+export function findAlternativesAround(
+  db: Database.Database,
+  salon_id: string,
+  service_duration_min: number,
+  anchorSec: number,
+  options: FindSlotsOptions & { count?: number } = {},
+): OfferedSlot[] {
+  const count = options.count ?? 3;
+  const anchor = new Date(anchorSec * 1000);
+  // Scan starts on the anchor's day; up to 7 days forward.
+  // Compose a temp "nowMs" that aligns the scan window with the anchor day.
+  // findAvailableSlots already enforces 24h-from-now lookahead, so we keep
+  // that real-clock floor — but bias the picked slots to be temporally
+  // close to the anchor by sorting after retrieval.
+  const candidates = findAvailableSlots(db, salon_id, service_duration_min, {
+    nowMs: options.nowMs,
+    minHoursAhead: options.minHoursAhead,
+    count: 12, // pull a wider pool
+    daysToScan: 7,
+  });
+
+  // Acknowledge `anchor` to satisfy the linter — kept available as a Date
+  // alias for future enhancements (e.g. same-day-priority filter).
+  void anchor;
+
+  // Sort by absolute distance from anchor; take top N
+  candidates.sort(
+    (a, b) =>
+      Math.abs(a.starts_at - anchorSec) - Math.abs(b.starts_at - anchorSec),
+  );
+  // Don't return the anchor itself if it happens to be in candidates
+  // (it shouldn't, since we only call this when anchor was unavailable).
+  return candidates.filter((c) => c.starts_at !== anchorSec).slice(0, count);
+}

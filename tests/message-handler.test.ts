@@ -175,6 +175,53 @@ describe("handleInboundMessage", () => {
     });
   });
 
+  describe("custom-time flow (4th option)", () => {
+    it("offer includes the custom-time 4th option label", async () => {
+      const r = await send("quiero cita para corte");
+      // Slots have 3 options + 1 custom — must show 4th
+      expect(r.reply).toContain("Otra fecha");
+    });
+
+    it("picking 4 transitions to awaiting_custom_time + asks the clienta", async () => {
+      await send("quiero cita");
+      const r = await send("4");
+      expect(r.reply).toContain("día y hora");
+    });
+
+    it("unparseable custom-time response asks for rephrase", async () => {
+      await send("quiero cita");
+      await send("4");
+      const r = await send("blablabla");
+      expect(r.reply).toContain("No pude entender");
+    });
+
+    it("custom time accepted → asks SÍ confirm → books on SÍ", async () => {
+      await send("quiero cita");
+      await send("4");
+      // "viernes 4pm" — both future enough and within Mon-Sat 9-19
+      const ask = await send("viernes 4pm");
+      expect(ask.reply).toContain("¿Confirmas?");
+
+      const confirm = await send("sí");
+      expect(confirm.reply).toContain("Listo");
+      // Appointment row created
+      const n = db
+        .prepare(
+          "SELECT COUNT(*) as n FROM appointments WHERE status='confirmed' AND contact_id = (SELECT id FROM contacts WHERE phone = ?)",
+        )
+        .get(PHONE) as { n: number };
+      expect(n.n).toBe(1);
+    });
+
+    it("custom time in the past rejects with explicit reason", async () => {
+      await send("quiero cita");
+      await send("4");
+      // "hoy 9am" is within 24h
+      const r = await send("hoy 9am");
+      expect(r.reply ?? "").toMatch(/24 horas|pasó|anticipación/i);
+    });
+  });
+
   describe("query flow", () => {
     it("returns next appointment when exists", async () => {
       const contact = upsertContact(db, { salon_id: salonId, phone: PHONE });

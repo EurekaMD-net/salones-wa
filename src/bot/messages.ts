@@ -34,13 +34,16 @@ export const Messages = {
     return "¿Para cuándo te gustaría la cita? Dime el día que prefieres 📅";
   },
 
-  offerSlots(slots: string[]): string {
+  offerSlots(slots: string[], service?: Service): string {
     if (slots.length === 0) {
       return "En este momento no tenemos lugares disponibles para esa fecha. ¿Te parece si te busco para otra fecha?";
     }
     const list = slots.map((s, i) => `${i + 1}️⃣ ${s}`).join("\n");
     const customOpt = `${slots.length + 1}️⃣ Otra fecha — dime cuándo te queda`;
-    return `Tenemos disponible:\n${list}\n${customOpt}\n\nResponde con el número ✅`;
+    const preamble = service
+      ? `Para *${service.name}* tenemos disponible:`
+      : "Tenemos disponible:";
+    return `${preamble}\n${list}\n${customOpt}\n\nResponde con el número ✅`;
   },
 
   appointmentConfirmed(appt: Appointment, service?: Service): string {

@@ -27,8 +27,67 @@ import {
   checkCustomTime,
 } from "./slot-finder.js";
 import { parseSpanishDateTime } from "./datetime-parser.js";
+import type { Service } from "../db/models.js";
 
 const DEFAULT_SLOT_DURATION_MIN = 60;
+
+/**
+ * Match a free-text service hint ("tinte", "corte y barba") to a salon's
+ * configured services. Returns undefined when no plausible match exists
+ * so the caller can ASK the clienta which service she wants instead of
+ * defaulting to services[0] (which produced the "everything is corte" bug
+ * surfaced 2026-05-24).
+ */
+function matchService(
+  services: Service[],
+  hint: string | undefined,
+): Service | undefined {
+  if (!hint) return undefined;
+  const lower = hint.toLowerCase();
+  // Exact match first
+  const exact = services.find((s) => s.name.toLowerCase() === lower);
+  if (exact) return exact;
+  // Service name appears in hint ("quiero tinte y corte" → matches Tinte first)
+  const inHint = services.find((s) => lower.includes(s.name.toLowerCase()));
+  if (inHint) return inHint;
+  // Hint appears in service name ("tinte" matches "Tinte Completo")
+  return services.find((s) => s.name.toLowerCase().includes(lower));
+}
+
+/** Reply path shared by BOOK and the new awaiting_service branch. */
+function offerSlotsForService(
+  db: import("better-sqlite3").Database,
+  salon_id: string,
+  contact_id: string,
+  service: Service,
+  campaign_id: string | undefined,
+  fromPhone: string,
+): HandleResult {
+  const durationMin = service.duration_min ?? DEFAULT_SLOT_DURATION_MIN;
+  const slots = findAvailableSlots(db, salon_id, durationMin);
+  if (slots.length === 0) {
+    conversationState.clear(salon_id, fromPhone);
+    return { reply: Messages.offerSlots([]) };
+  }
+  conversationState.set(
+    {
+      step: "awaiting_slot_selection",
+      salon_id,
+      contact_id,
+      pending_service_id: service.id,
+      pending_slots: slots,
+      campaign_id,
+      updated_at: Date.now(),
+    },
+    fromPhone,
+  );
+  return {
+    reply: Messages.offerSlots(
+      slots.map((s: { label: string }) => s.label),
+      service,
+    ),
+  };
+}
 
 export interface HandleResult {
   reply: string | null; // null = no reply needed
@@ -523,36 +582,74 @@ export async function handleInboundMessage(
     return { reply: Messages.nextAppointment(next, service) };
   }
 
+  // ─── Awaiting service selection (from BOOK with ambiguous service) ────
+  if (state?.step === "awaiting_service") {
+    const services = getServices(db, salon_id);
+    if (services.length === 0) {
+      conversationState.clear(salon_id, fromPhone);
+      return { reply: Messages.fallback() };
+    }
+    const trimmed = text.trim();
+    const n = parseInt(trimmed, 10);
+    let picked: Service | undefined;
+    if (!isNaN(n) && n >= 1 && n <= services.length) {
+      picked = services[n - 1];
+    } else {
+      picked = matchService(services, trimmed);
+    }
+    if (!picked) {
+      return { reply: Messages.askService(services) };
+    }
+    return offerSlotsForService(
+      db,
+      salon_id,
+      contact.id,
+      picked,
+      state.campaign_id,
+      fromPhone,
+    );
+  }
+
   // ─── Book ─────────────────────────────────────────────────────────────
   if (intent.type === "book" || intent.type === "reactivation_yes") {
     const services = getServices(db, salon_id);
-    // MVP picks the first service (services[0]); service_id-specific picking
-    // is a follow-up. Slot duration uses that service's duration.
-    const pickedService = services[0];
-    const durationMin =
-      pickedService?.duration_min ?? DEFAULT_SLOT_DURATION_MIN;
-    const slots = findAvailableSlots(db, salon_id, durationMin);
+    if (services.length === 0) {
+      // Salon has no services configured — operator must add them via /admin.
+      return { reply: Messages.fallback() };
+    }
+    const hint = intent.type === "book" ? intent.service : undefined;
+    let picked = matchService(services, hint);
 
-    if (slots.length === 0) {
-      return { reply: Messages.offerSlots([]) };
+    // Auto-pick if the salon only offers one service — asking is pointless.
+    if (!picked && services.length === 1) {
+      picked = services[0];
     }
 
-    conversationState.set(
-      {
-        step: "awaiting_slot_selection",
-        salon_id,
-        contact_id: contact.id,
-        pending_service_id: pickedService?.id,
-        pending_slots: slots,
-        campaign_id: state?.campaign_id,
-        updated_at: Date.now(),
-      },
+    if (!picked) {
+      // Ambiguous or no hint — ask the clienta which service. Was the
+      // "everything is corte" bug surfaced 2026-05-24: BOOK used to
+      // default to services[0] regardless of the clienta's actual intent.
+      conversationState.set(
+        {
+          step: "awaiting_service",
+          salon_id,
+          contact_id: contact.id,
+          campaign_id: state?.campaign_id,
+          updated_at: Date.now(),
+        },
+        fromPhone,
+      );
+      return { reply: Messages.askService(services) };
+    }
+
+    return offerSlotsForService(
+      db,
+      salon_id,
+      contact.id,
+      picked,
+      state?.campaign_id,
       fromPhone,
     );
-
-    return {
-      reply: Messages.offerSlots(slots.map((s: { label: string }) => s.label)),
-    };
   }
 
   // ─── Unknown ──────────────────────────────────────────────────────────

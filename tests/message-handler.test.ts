@@ -175,6 +175,70 @@ describe("handleInboundMessage", () => {
     });
   });
 
+  describe("service selection", () => {
+    beforeEach(() => {
+      // Add more services so we can verify matching beyond services[0]
+      addService(db, {
+        salon_id: salonId,
+        name: "Tinte",
+        duration_min: 90,
+        price: 500,
+      });
+      addService(db, {
+        salon_id: salonId,
+        name: "Manicure",
+        duration_min: 60,
+        price: 200,
+      });
+    });
+
+    it("matches explicit service hint from BOOK message", async () => {
+      const r = await send("quiero cita para tinte");
+      // Should offer slots for Tinte (which appears in preamble)
+      expect(r.reply).toMatch(/Tinte/i);
+    });
+
+    it("asks which service when no hint", async () => {
+      const r = await send("quiero cita");
+      expect(r.reply).toMatch(/qué servicio/i);
+      // List should include all 3 services
+      expect(r.reply).toMatch(/Corte/);
+      expect(r.reply).toMatch(/Tinte/);
+      expect(r.reply).toMatch(/Manicure/);
+    });
+
+    it("picks service by number after asking", async () => {
+      await send("quiero cita"); // no hint → asks
+      const r = await send("2"); // pick 2nd service (Tinte)
+      expect(r.reply).toMatch(/Tinte/i);
+    });
+
+    it("picks service by name (case-insensitive)", async () => {
+      await send("quiero cita");
+      const r = await send("manicure");
+      expect(r.reply).toMatch(/Manicure/i);
+    });
+
+    it("re-asks on invalid service input", async () => {
+      await send("quiero cita");
+      const r = await send("99");
+      expect(r.reply).toMatch(/qué servicio/i);
+    });
+
+    it("books selected service end-to-end (not defaulting to Corte)", async () => {
+      await send("quiero cita para tinte");
+      const offer = await send("1");
+      expect(offer.reply).toMatch(/Tinte/i);
+
+      const row = db
+        .prepare(
+          "SELECT s.name FROM appointments a JOIN services s ON s.id = a.service_id WHERE a.contact_id = (SELECT id FROM contacts WHERE phone = ?) ORDER BY a.created_at DESC LIMIT 1",
+        )
+        .get(PHONE) as { name: string };
+      expect(row.name).toBe("Tinte");
+    });
+  });
+
   describe("custom-time flow (4th option)", () => {
     it("offer includes the custom-time 4th option label", async () => {
       const r = await send("quiero cita para corte");

@@ -6,14 +6,15 @@
 
 ## Intent Categories
 
-| Intent | Trigger | Flujo |
-|--------|---------|-------|
-| `BOOK` | "quiero cita", "agendar", "apartar", "corte", "tinte" | Flujo 1 |
-| `CONFIRM` | "SÍ", "si", "confirmo", "voy" (en respuesta a recordatorio) | Flujo 3a |
-| `CANCEL` | "cancelar", "no puedo", "CANCELAR" | Flujo 4 |
-| `QUERY` | "mi cita", "cuándo", "a qué hora" | Flujo 5 |
-| `OPT_OUT` | "no me mandes mensajes", "baja", "stop" | Flujo 6 |
-| `NONE` | cualquier otro texto | Flujo 7 (fallback) |
+| Intent       | Trigger                                                     | Flujo              |
+| ------------ | ----------------------------------------------------------- | ------------------ |
+| `BOOK`       | "quiero cita", "agendar", "apartar", "corte", "tinte"       | Flujo 1            |
+| `CONFIRM`    | "SÍ", "si", "confirmo", "voy" (en respuesta a recordatorio) | Flujo 3a           |
+| `CANCEL`     | "cancelar", "no puedo", "CANCELAR"                          | Flujo 4            |
+| `RESCHEDULE` | "cambiar mi cita", "reagendar", "mover", "modificar"        | Flujo 4b           |
+| `QUERY`      | "mi cita", "cuándo", "a qué hora"                           | Flujo 5            |
+| `OPT_OUT`    | "no me mandes mensajes", "baja", "stop"                     | Flujo 6            |
+| `NONE`       | cualquier otro texto                                        | Flujo 7 (fallback) |
 
 ---
 
@@ -47,6 +48,7 @@ Bot:      "Listo Carmen 💕 Tu cita es el sábado 28 a las 10:00am para corte.
 ```
 
 **Reglas:**
+
 - Mostrar máximo 3 slots disponibles más próximos
 - Un slot = franja de `service.duration_min` minutos dentro del horario del salón
 - Si no hay slots en los próximos 7 días → "No tenemos disponibilidad esta semana, ¿te aviso cuando haya lugar?"
@@ -77,6 +79,7 @@ Clienta no responde en 7 días:
 ```
 
 **Rate limits:**
+
 - Máximo 20 mensajes outbound por hora (anti-ban Baileys)
 - Máximo 1 mensaje de reactivación por contacto por mes
 - Solo contactar si `visit_count >= 1` (nunca a alguien sin historial)
@@ -88,6 +91,7 @@ Clienta no responde en 7 días:
 **Trigger:** Crons de recordatorio
 
 ### 3a — 24 horas antes
+
 ```
 Bot → Clienta (24h antes):
 "Hola [nombre] 😊 Te recuerdo que mañana tienes cita:
@@ -108,6 +112,7 @@ Clienta no responde en 2h:
 ```
 
 ### 3b — 2 horas antes (solo si no confirmó)
+
 ```
 Condición: reminded_2h = 0 AND confirmed_by_client = 0
 
@@ -135,6 +140,38 @@ Bot:      "✅ Cancelada. ¡Cuando quieras agendar de nuevo, escríbenos! 💕"
 [Si no tiene cita activa]
 Bot:      "No encontré citas activas para ti. ¿Querías agendar algo? 😊"
 ```
+
+---
+
+## Flujo 4b — Reagendar Cita (inbound)
+
+**Trigger:** Clienta escribe con intent `RESCHEDULE` (e.g. "quiero cambiar mi cita", "reagendar", "mover mi cita")
+
+```
+Clienta:  "Quiero cambiar mi cita"
+Bot:      "Tu cita actual es el sábado 28 mayo a las 10:00am (Corte).
+           ¿Para cuándo la quieres mover?
+           1️⃣ Lunes 30 mayo — 10:00am
+           2️⃣ Lunes 30 mayo — 2:00pm
+           3️⃣ Martes 31 mayo — 9:00am
+           Responde con el número. La cita anterior queda cancelada al confirmar la nueva."
+
+Clienta:  "1"
+Bot:      "✅ Listo! Tu cita (Corte) quedó el lunes 30 mayo a las 10:00am.
+           La anterior (sábado 28 mayo a las 10:00am) queda cancelada. Te recordaré 24h antes 💇‍♀️"
+→ appointment NEW row created (status=confirmed)
+→ appointment OLD row status=cancelled, cancelled_at = now
+→ service_id inherited from the original appointment (MVP scope: no service swap)
+
+[Si no tiene cita activa para mover]
+Bot:      "No tienes citas próximas agendadas. ¿Quieres apartar una? 💇‍♀️"
+```
+
+**Reglas:**
+
+- El service del nuevo appointment se hereda del original (la dueña no puede cambiar de servicio en el reschedule MVP — para cambio de servicio, cancela + agenda nuevo).
+- Si la clienta tiene múltiples citas futuras, se reagenda la _próxima_ (la más cercana cronológicamente).
+- Atomicidad: el nuevo appointment se crea ANTES de cancelar el anterior. En caso improbable de fallo de la cancelación, la clienta tendría dos citas (recoverable) en vez de cero (peor experiencia).
 
 ---
 
@@ -211,4 +248,4 @@ Estado almacenado en memoria (Map) — no se persiste en SQLite para mantener si
 
 ---
 
-*Especificación v1 · 2026-05-23*
+_Especificación v1 · 2026-05-23_

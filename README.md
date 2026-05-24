@@ -10,7 +10,7 @@
 | Métrica                  | Valor                                                                 |
 | ------------------------ | --------------------------------------------------------------------- |
 | **Fase**                 | **En producción** — systemd activo, listo para conectar número WA     |
-| **Tests**                | **109 / 109 ✅**                                                      |
+| **Tests**                | **126 / 126 ✅**                                                      |
 | **Typecheck**            | 0 errores                                                             |
 | **Último commit**        | 2026-05-23                                                            |
 | **Servicio**             | `salones-wa` (systemd, usuario dedicado, bind `127.0.0.1:8085`)       |
@@ -37,7 +37,7 @@ Los tres comparten una sola instancia de Baileys, una BD SQLite, y un panel web.
 Clientas (inbound)  ─────► Baileys (Node.js, mismo VPS)
                                   │
                                   ▼
-                           Intent Parser (regex — 7 intents)
+                           Intent Parser (regex — 8 intents)
                                   │
                                   ▼
                            Message Handler
@@ -67,7 +67,7 @@ Clientas (inbound)  ─────► Baileys (Node.js, mismo VPS)
 | WA            | **Baileys**                        | Cero costo, arranque en horas                 |
 | HTTP/Panel    | **Hono**                           | Lightweight, mismo patrón que mission-control |
 | BD            | **SQLite** (separada de mc.db)     | Multi-tenant simple, sin deps externas        |
-| Intent Parser | **Regex** (7 intents, sin LLM)     | Cero latencia, cero costo, determinístico     |
+| Intent Parser | **Regex** (8 intents, sin LLM)     | Cero latencia, cero costo, determinístico     |
 | Crons         | **node-cron**                      | Mismo patrón del VPS                          |
 | Puerto panel  | **8085**                           | Ya abierto en UFW, sin cambios de firewall    |
 | Runtime       | **tsx** (dev) / **Node.js** (prod) | ESM nativo, TypeScript directo                |
@@ -82,7 +82,7 @@ salones-wa/
 │   ├── bot/
 │   │   ├── baileys-manager.ts      # Conexión WA + stub para dev/test
 │   │   ├── conversation-state.ts   # State machine en memoria, TTL 30min
-│   │   ├── intent-parser.ts        # Parser regex — 7 intents
+│   │   ├── intent-parser.ts        # Parser regex — 8 intents
 │   │   ├── message-handler.ts      # Handler principal — recibe texto, devuelve reply
 │   │   └── messages.ts             # Copy del bot centralizado
 │   ├── crons/
@@ -98,9 +98,9 @@ salones-wa/
 │   │   └── admin.test.ts           # 18 tests (incluye pins P0-1)
 │   └── index.ts                    # Entry point + graceful shutdown
 ├── tests/
-│   ├── intent-parser.test.ts       # 28 tests
+│   ├── intent-parser.test.ts       # 39 tests
 │   ├── models.test.ts              # 33 tests  (includes P0-2 idempotence pin)
-│   ├── message-handler.test.ts     # 15 tests
+│   ├── message-handler.test.ts     # 21 tests
 │   ├── conversation-state.test.ts  # 6 tests
 │   └── web-panel.test.ts           # 9 tests
 │                                   # (admin.test.ts colocado en src/web/)
@@ -122,6 +122,7 @@ salones-wa/
 | ------------------- | -------------------------------------------------- |
 | `book`              | Quiero cita, agendar, corte, tinte, manicure...    |
 | `cancel`            | Cancelar, no puedo, no voy...                      |
+| `reschedule`        | Cambiar mi cita, reagendar, mover, modificar...    |
 | `confirm`           | Sí, confirmo, dale, ok...                          |
 | `query_appointment` | Mi cita, cuándo, a qué hora...                     |
 | `opt_out`           | Stop, baja, no me mandes mensajes...               |

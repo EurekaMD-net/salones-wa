@@ -7,25 +7,25 @@
 
 ## Estado del proyecto
 
-| Métrica | Valor |
-|---------|-------|
-| **Fase** | **En producción** — systemd activo, listo para conectar número WA |
-| **Tests** | **109 / 109 ✅** |
-| **Typecheck** | 0 errores |
-| **Último commit** | 2026-05-23 |
-| **Servicio** | `salones-wa` (systemd, usuario dedicado, bind `127.0.0.1:8085`) |
-| **URL pública (nip.io)** | `https://salones.187.77.25.101.nip.io` |
-| **Admin panel** | `https://salones.187.77.25.101.nip.io/admin?token=salones-admin-2026` |
+| Métrica                  | Valor                                                                 |
+| ------------------------ | --------------------------------------------------------------------- |
+| **Fase**                 | **En producción** — systemd activo, listo para conectar número WA     |
+| **Tests**                | **109 / 109 ✅**                                                      |
+| **Typecheck**            | 0 errores                                                             |
+| **Último commit**        | 2026-05-23                                                            |
+| **Servicio**             | `salones-wa` (systemd, usuario dedicado, bind `127.0.0.1:8085`)       |
+| **URL pública (nip.io)** | `https://salones.187.77.25.101.nip.io`                                |
+| **Admin panel**          | `https://salones.187.77.25.101.nip.io/admin?token=salones-admin-2026` |
 
 ---
 
 ## Los 3 productos del sistema
 
-| # | Producto | Dolor que resuelve | Cuándo se activa |
-|---|----------|--------------------|-------------------|
-| 🥇 | **Asistente de Citas** | Dueña cortando → no responde → clienta se va | Inbound: clienta escribe primero |
-| 🥈 | **Reactivación de Dormidas** | Clienta que vino 1-3x y desapareció (>30 días sin cita) | Outbound: cron lunes 10am |
-| 🥉 | **Anti-Cancelación** | Slot vacío de último minuto, cita olvidada | Outbound: cron 24h + 2h antes |
+| #   | Producto                     | Dolor que resuelve                                      | Cuándo se activa                 |
+| --- | ---------------------------- | ------------------------------------------------------- | -------------------------------- |
+| 🥇  | **Asistente de Citas**       | Dueña cortando → no responde → clienta se va            | Inbound: clienta escribe primero |
+| 🥈  | **Reactivación de Dormidas** | Clienta que vino 1-3x y desapareció (>30 días sin cita) | Outbound: cron lunes 10am        |
+| 🥉  | **Anti-Cancelación**         | Slot vacío de último minuto, cita olvidada              | Outbound: cron 24h + 2h antes    |
 
 Los tres comparten una sola instancia de Baileys, una BD SQLite, y un panel web. **No son módulos separados — son flujos del mismo bot.**
 
@@ -62,15 +62,15 @@ Clientas (inbound)  ─────► Baileys (Node.js, mismo VPS)
 
 ## Stack técnico
 
-| Capa | Tecnología | Razón |
-|------|-----------|-------|
-| WA | **Baileys** | Cero costo, arranque en horas |
-| HTTP/Panel | **Hono** | Lightweight, mismo patrón que mission-control |
-| BD | **SQLite** (separada de mc.db) | Multi-tenant simple, sin deps externas |
-| Intent Parser | **Regex** (7 intents, sin LLM) | Cero latencia, cero costo, determinístico |
-| Crons | **node-cron** | Mismo patrón del VPS |
-| Puerto panel | **8085** | Ya abierto en UFW, sin cambios de firewall |
-| Runtime | **tsx** (dev) / **Node.js** (prod) | ESM nativo, TypeScript directo |
+| Capa          | Tecnología                         | Razón                                         |
+| ------------- | ---------------------------------- | --------------------------------------------- |
+| WA            | **Baileys**                        | Cero costo, arranque en horas                 |
+| HTTP/Panel    | **Hono**                           | Lightweight, mismo patrón que mission-control |
+| BD            | **SQLite** (separada de mc.db)     | Multi-tenant simple, sin deps externas        |
+| Intent Parser | **Regex** (7 intents, sin LLM)     | Cero latencia, cero costo, determinístico     |
+| Crons         | **node-cron**                      | Mismo patrón del VPS                          |
+| Puerto panel  | **8085**                           | Ya abierto en UFW, sin cambios de firewall    |
+| Runtime       | **tsx** (dev) / **Node.js** (prod) | ESM nativo, TypeScript directo                |
 
 ---
 
@@ -118,15 +118,15 @@ salones-wa/
 
 ## Intents del parser
 
-| Intent | Cuándo se activa |
-|--------|-----------------|
-| `book` | Quiero cita, agendar, corte, tinte, manicure... |
-| `cancel` | Cancelar, no puedo, no voy... |
-| `confirm` | Sí, confirmo, dale, ok... |
-| `query_appointment` | Mi cita, cuándo, a qué hora... |
-| `opt_out` | Stop, baja, no me mandes mensajes... |
-| `reactivation_yes` | Sí, claro, quiero, dale... (contexto reactivación) |
-| `reactivation_no` | No, ahorita no, después... (contexto reactivación) |
+| Intent              | Cuándo se activa                                   |
+| ------------------- | -------------------------------------------------- |
+| `book`              | Quiero cita, agendar, corte, tinte, manicure...    |
+| `cancel`            | Cancelar, no puedo, no voy...                      |
+| `confirm`           | Sí, confirmo, dale, ok...                          |
+| `query_appointment` | Mi cita, cuándo, a qué hora...                     |
+| `opt_out`           | Stop, baja, no me mandes mensajes...               |
+| `reactivation_yes`  | Sí, claro, quiero, dale... (contexto reactivación) |
+| `reactivation_no`   | No, ahorita no, después... (contexto reactivación) |
 
 El contexto (`'reactivation'`) se pasa cuando la conversación está en estado `reactivation_sent` para que `sí` resuelva como `reactivation_yes` y no como `confirm`.
 
@@ -135,6 +135,7 @@ El contexto (`'reactivation'`) se pasa cuando la conversación está en estado `
 ## Flujos de conversación
 
 ### Flujo 1 — Agendar cita (inbound)
+
 ```
 Clienta:  "Hola, quiero cita para corte"
 Bot:      "¡Hola! 👋 ¿Para cuándo? Tenemos disponible:
@@ -148,6 +149,7 @@ Bot:      "✅ Listo! Tu cita es el sábado 28 a las 10:00am para corte.
 ```
 
 ### Flujo 2 — Anti-cancelación (outbound, crons)
+
 ```
 [24h antes]
 Bot:  "Hola [nombre] 😊 Te recuerdo que mañana tienes cita a las 10:00am
@@ -159,6 +161,7 @@ Bot:  "Recordatorio rápido: tu cita es hoy a las 10:00am.
 ```
 
 ### Flujo 3 — Reactivación (outbound, cron lunes 10am)
+
 ```
 Condición: last_visit > 30 días, sin cita futura, al menos 1 cita completada
 Bot:       "Hola [nombre] 👋 Hace un tiempo que no te vemos por el salón.
@@ -187,14 +190,14 @@ Ver `docs/SCHEMA.md` para el DDL completo.
 
 ## Cron Jobs
 
-| Job | Schedule | Acción |
-|-----|----------|--------|
-| `remind-24h` | `5 * * * *` (cada hora) | Busca citas en 24-25h → envía recordatorio |
-| `remind-2h` | `*/30 * * * *` (cada 30 min) | Busca citas en 2-3h sin confirmación |
-| `mark-completed` | `10 * * * *` (cada hora) | Marca como `completed` citas pasadas |
-| `update-dormant` | `15 0 * * *` (diario 00:15) | Actualiza flag `dormant` en contacts |
-| `reactivation-campaign` | `0 10 * * 1` (lunes 10am) | Detecta dormidas → dispara outbound, máx 20 msgs/h |
-| `state-eviction` | `*/30 * * * *` (cada 30 min) | Limpia conversation states con TTL expirado |
+| Job                     | Schedule                     | Acción                                             |
+| ----------------------- | ---------------------------- | -------------------------------------------------- |
+| `remind-24h`            | `5 * * * *` (cada hora)      | Busca citas en 24-25h → envía recordatorio         |
+| `remind-2h`             | `*/30 * * * *` (cada 30 min) | Busca citas en 2-3h sin confirmación               |
+| `mark-completed`        | `10 * * * *` (cada hora)     | Marca como `completed` citas pasadas               |
+| `update-dormant`        | `15 0 * * *` (diario 00:15)  | Actualiza flag `dormant` en contacts               |
+| `reactivation-campaign` | `0 10 * * 1` (lunes 10am)    | Detecta dormidas → dispara outbound, máx 20 msgs/h |
+| `state-eviction`        | `*/30 * * * *` (cada 30 min) | Limpia conversation states con TTL expirado        |
 
 ---
 
@@ -202,13 +205,13 @@ Ver `docs/SCHEMA.md` para el DDL completo.
 
 Auth por token UUID en URL (`?token=<salon-uuid>`). Sin login, sin OAuth — funciona en 3G.
 
-| Ruta | Descripción |
-|------|-------------|
-| `GET /health` | Health check público |
+| Ruta                          | Descripción                                      |
+| ----------------------------- | ------------------------------------------------ |
+| `GET /health`                 | Health check público                             |
 | `GET /panel/dashboard?token=` | Citas de hoy + estadísticas + contactos dormidos |
-| `GET /panel/contacts?token=` | Lista de contactos con filtros |
+| `GET /panel/contacts?token=`  | Lista de contactos con filtros                   |
 | `GET /panel/campaigns?token=` | Historial y métricas de campañas de reactivación |
-| `GET /api/stats?token=` | JSON con métricas del salón |
+| `GET /api/stats?token=`       | JSON con métricas del salón                      |
 
 ---
 
@@ -238,46 +241,48 @@ ROI para la dueña:         5x-10x en valor recuperado vs precio
 
 ## Riesgos y mitigaciones
 
-| Riesgo | Mitigación |
-|--------|-----------| 
-| WhatsApp banea número | Delays aleatorios (2-5s), número secundario para dev, rate limit 20 msgs/h |
-| Dueña no sabe escanear QR | Video tutorial 60s, soporte onboarding |
-| Clienta molesta por outbound | Solo contactar con historial real, máx 1x/mes por contacto, opt-out inmediato |
-| Pérdida de sesión WA | Auto-reconexión en `baileys-manager.ts` (3 intentos), log de desconexión |
+| Riesgo                                              | Mitigación                                                                                       |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| WhatsApp banea número                               | Delays aleatorios (2-5s), número secundario para dev, rate limit 20 msgs/h                       |
+| WhatsApp rechaza vínculo desde VPS (data-center IP) | **Pairing code** preferido sobre QR — ver "Vincular número WA" abajo. QR funciona como fallback. |
+| Dueña no sabe escanear QR ni código                 | Pairing code = 8 dígitos, copia-pega en WA. Video tutorial 60s.                                  |
+| Clienta molesta por outbound                        | Solo contactar con historial real, máx 1x/mes por contacto, opt-out inmediato                    |
+| Pérdida de sesión WA                                | Auto-reconexión en `baileys-manager.ts` (3 intentos), log de desconexión                         |
 
 ---
 
 ## Mercado objetivo
 
-| Métrica | Dato |
-|---------|------|
+| Métrica         | Dato                             |
+| --------------- | -------------------------------- |
 | Salones en CDMX | **23,337** (SCIAN 812110, DENUE) |
-| Alcaldía líder | Iztapalapa — 5,224 (22.4%) |
-| Target piloto | Iztapalapa (densidad + acceso) |
-| Precio | $500–$800/mes por salón |
-| TAM CDMX @ 1% | ~$116,685/mes |
+| Alcaldía líder  | Iztapalapa — 5,224 (22.4%)       |
+| Target piloto   | Iztapalapa (densidad + acceso)   |
+| Precio          | $500–$800/mes por salón          |
+| TAM CDMX @ 1%   | ~$116,685/mes                    |
 
 ### Expansión potencial (giros afines)
-| Giro | Unidades CDMX | TAM @ 1% |
-|------|--------------|----------|
-| Consultorios dentales | 7,257 | $43,542/mes |
-| Talleres mecánicos | 5,565 | $33,390/mes |
-| Lavanderías | 5,261 | $31,566/mes |
-| **Total 6 giros** | **49,079** | **~$294K/mes** |
+
+| Giro                  | Unidades CDMX | TAM @ 1%       |
+| --------------------- | ------------- | -------------- |
+| Consultorios dentales | 7,257         | $43,542/mes    |
+| Talleres mecánicos    | 5,565         | $33,390/mes    |
+| Lavanderías           | 5,261         | $31,566/mes    |
+| **Total 6 giros**     | **49,079**    | **~$294K/mes** |
 
 ---
 
 ## Fases de desarrollo
 
-| Semana | Focus | Estado |
-|--------|-------|--------|
-| **1-2** | Bot core + anti-cancel + reactivación | ✅ **COMPLETO** — 88 tests |
-| **2b** | Admin UI — alta/baja salones, servicios | ✅ **COMPLETO** — 109 tests |
-| **2c** | Hardening seguridad + systemd + deploy en VPS | ✅ **COMPLETO** — en producción 2026-05-23 |
-| **3** | Piloto real: conectar número WA, primer salón | 🔜 **SIGUIENTE** — admin panel listo |
-| **4** | Panel web refinado (feedback de uso real) | ⏳ Pendiente |
-| **5** | Multi-tenant (2+ salones en paralelo) | ⏳ Pendiente |
-| **6+** | Cold outreach Iztapalapa, primer pago | ⏳ Pendiente |
+| Semana  | Focus                                         | Estado                                     |
+| ------- | --------------------------------------------- | ------------------------------------------ |
+| **1-2** | Bot core + anti-cancel + reactivación         | ✅ **COMPLETO** — 88 tests                 |
+| **2b**  | Admin UI — alta/baja salones, servicios       | ✅ **COMPLETO** — 109 tests                |
+| **2c**  | Hardening seguridad + systemd + deploy en VPS | ✅ **COMPLETO** — en producción 2026-05-23 |
+| **3**   | Piloto real: conectar número WA, primer salón | 🔜 **SIGUIENTE** — admin panel listo       |
+| **4**   | Panel web refinado (feedback de uso real)     | ⏳ Pendiente                               |
+| **5**   | Multi-tenant (2+ salones en paralelo)         | ⏳ Pendiente                               |
+| **6+**  | Cold outreach Iztapalapa, primer pago         | ⏳ Pendiente                               |
 
 ---
 
@@ -300,20 +305,43 @@ SESSIONS_DIR=./data/sessions
 3. Llenar nombre, teléfono WA (ej: `5215512345678`) y servicios iniciales
 4. Al crear → el sistema muestra la **URL del panel para la dueña**
 5. Compartir esa URL con la dueña (se accede desde cualquier celular, sin app)
-6. Conectar el número WA: `npm run dev` → escanear QR en la terminal
+6. **Reiniciar el servicio** (`systemctl restart salones-wa`) para que Baileys cargue el nuevo salón
+7. Vincular el número WA — ver "Vincular número WA" abajo
+
+### Vincular número WA — pairing code (preferido) o QR
+
+El servicio emite **dos métodos** de vínculo al iniciar para cada salón sin sesión:
+
+- **Pairing code (recomendado para VPS / data-center)**: 8 dígitos que se ingresan directamente en WhatsApp. WhatsApp's QR-link flow rechaza cada vez más conexiones desde IPs de data center (`"At this moment you can't add new devices"`). El pairing code usa otro backend y suele pasar.
+- **QR** como fallback, por si el pairing code falla en algún número.
+
+```bash
+# 1. Capturar el código en journalctl tras restart o creación de salón
+journalctl -u salones-wa -f | grep -E "Pairing code|QR for salon"
+# → [salones-wa] Pairing code for salon <id>: ABCD-EFGH
+
+# 2. En el teléfono con el número WA del salón:
+#    WhatsApp → ⋮ → Dispositivos vinculados →
+#    "Vincular un dispositivo" → "Vincular con número de teléfono"
+#    → ingresar el código de 8 dígitos
+```
+
+El código expira en ~60s. Si expira, el servicio emite uno nuevo automáticamente.
+
+Una vez vinculado: `[baileys] [<phone>] connected ✅` en journalctl y archivos de sesión en `data/sessions/<salonId>/`.
 
 ### Rutas del admin
 
-| Ruta | Descripción |
-|------|-------------|
-| `GET /admin` | Lista todos los salones |
-| `GET /admin/salones/new` | Formulario crear salón |
-| `POST /admin/salones` | Crear salón + servicios |
-| `GET /admin/salones/:id` | Editar nombre, teléfono, servicios |
-| `POST /admin/salones/:id/edit` | Guardar cambios |
-| `POST /admin/salones/:id/toggle` | Activar / desactivar |
-| `POST /admin/salones/:id/services` | Agregar servicio |
-| `POST /admin/salones/:id/services/:svcId/delete` | Eliminar servicio |
+| Ruta                                             | Descripción                        |
+| ------------------------------------------------ | ---------------------------------- |
+| `GET /admin`                                     | Lista todos los salones            |
+| `GET /admin/salones/new`                         | Formulario crear salón             |
+| `POST /admin/salones`                            | Crear salón + servicios            |
+| `GET /admin/salones/:id`                         | Editar nombre, teléfono, servicios |
+| `POST /admin/salones/:id/edit`                   | Guardar cambios                    |
+| `POST /admin/salones/:id/toggle`                 | Activar / desactivar               |
+| `POST /admin/salones/:id/services`               | Agregar servicio                   |
+| `POST /admin/salones/:id/services/:svcId/delete` | Eliminar servicio                  |
 
 ---
 
@@ -334,7 +362,7 @@ ADMIN_TOKEN=admin123 BIND_HOST=0.0.0.0 npm run dev
 
 # Admin panel en: http://localhost:8085/admin?token=admin123
 # Crear primer salón desde el panel → obtener URL para dueña
-# Escanear QR con WA del número del salón
+# Vincular WA: pairing code (preferido) o QR — ver sección "Vincular número WA"
 ```
 
 ## Deployment (producción)
@@ -348,12 +376,12 @@ systemctl status salones-wa   # → active (running)
 curl https://salones.187.77.25.101.nip.io/health  # → {"ok":true}
 ```
 
-| Recurso | URL |
-|---------|-----|
-| Health check | `https://salones.187.77.25.101.nip.io/health` |
-| Admin panel | `https://salones.187.77.25.101.nip.io/admin?token=salones-admin-2026` |
+| Recurso      | URL                                                                   |
+| ------------ | --------------------------------------------------------------------- |
+| Health check | `https://salones.187.77.25.101.nip.io/health`                         |
+| Admin panel  | `https://salones.187.77.25.101.nip.io/admin?token=salones-admin-2026` |
 
-**Próximo paso:** crear primer salón en el admin panel → escanear QR con número WA piloto.
+**Próximo paso:** crear primer salón en el admin panel → reiniciar servicio → vincular número WA con pairing code (ver sección "Vincular número WA").
 
 ---
 
@@ -413,5 +441,5 @@ systemctl daemon-reload && systemctl enable --now salones-wa
 
 ---
 
-*Proyecto: Negocios Auto-Gestionados · Vertical: Salones de Belleza*  
-*Iniciado: 2026-05-23 · MVP construido: 2026-05-23*
+_Proyecto: Negocios Auto-Gestionados · Vertical: Salones de Belleza_  
+_Iniciado: 2026-05-23 · MVP construido: 2026-05-23_

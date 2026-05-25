@@ -7,6 +7,9 @@ export interface Salon {
   id: string;
   name: string;
   phone: string;
+  /** Dueña's personal WA — optional, used for service notifications only.
+   * Never bound to a Baileys session; never receives client traffic. */
+  owner_phone: string | null;
   timezone: string;
   token: string;
   active: number;
@@ -61,19 +64,25 @@ export interface Campaign {
 
 export function createSalon(
   db: Database.Database,
-  data: { name: string; phone: string; timezone?: string },
+  data: {
+    name: string;
+    phone: string;
+    owner_phone?: string | null;
+    timezone?: string;
+  },
 ): Salon {
   const id = randomUUID();
   const token = randomUUID();
   db.prepare(
     `
-    INSERT INTO salons (id, name, phone, timezone, token)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO salons (id, name, phone, owner_phone, timezone, token)
+    VALUES (?, ?, ?, ?, ?, ?)
   `,
   ).run(
     id,
     data.name,
     data.phone,
+    data.owner_phone ?? null,
     data.timezone ?? "America/Mexico_City",
     token,
   );
@@ -121,13 +130,22 @@ export function getSalonById(db: Database.Database, id: string): Salon | null {
 export function updateSalon(
   db: Database.Database,
   id: string,
-  data: { name?: string; phone?: string },
+  data: { name?: string; phone?: string; owner_phone?: string | null },
 ): Salon | null {
   if (data.name !== undefined) {
     db.prepare("UPDATE salons SET name = ? WHERE id = ?").run(data.name, id);
   }
   if (data.phone !== undefined) {
     db.prepare("UPDATE salons SET phone = ? WHERE id = ?").run(data.phone, id);
+  }
+  // owner_phone is explicitly nullable — passing null clears it, undefined
+  // leaves it untouched. The form sends empty-string → caller maps to null
+  // before getting here.
+  if (data.owner_phone !== undefined) {
+    db.prepare("UPDATE salons SET owner_phone = ? WHERE id = ?").run(
+      data.owner_phone,
+      id,
+    );
   }
   return getSalonById(db, id);
 }

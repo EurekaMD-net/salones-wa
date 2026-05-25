@@ -7,14 +7,20 @@ PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 
 -- Salones (tenants)
+-- phone        = WhatsApp line used WITH CLIENTAS (Baileys binds here)
+-- owner_phone  = personal WhatsApp of the dueña, optional, used ONLY for
+--                out-of-band service notifications (session disconnects,
+--                daily summaries, etc). Never receives client traffic and
+--                never gets bound to a Baileys session.
 CREATE TABLE IF NOT EXISTS salons (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL,
-  phone      TEXT UNIQUE NOT NULL,
-  timezone   TEXT NOT NULL DEFAULT 'America/Mexico_City',
-  token      TEXT UNIQUE NOT NULL,       -- UUID auth token for web panel
-  active     INTEGER NOT NULL DEFAULT 1,
-  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  phone       TEXT UNIQUE NOT NULL,
+  owner_phone TEXT,
+  timezone    TEXT NOT NULL DEFAULT 'America/Mexico_City',
+  token       TEXT UNIQUE NOT NULL,       -- UUID auth token for web panel
+  active      INTEGER NOT NULL DEFAULT 1,
+  created_at  INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
 -- Servicios por salón

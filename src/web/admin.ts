@@ -296,6 +296,11 @@ export function createAdminPanel(db: Database.Database): Hono {
               <input class="form-control" name="phone" required placeholder="525555555555" />
               <div class="form-hint">El número de WhatsApp que la dueña ya tiene activo y que sus clientas conocen. La dueña lo va a "vincular" como dispositivo desde su teléfono — Baileys se conecta ahí, no es un número aparte. Solo dígitos sin +. Ejemplo MX celular: 525555555555 (12 dígitos).</div>
             </div>
+            <div class="form-group">
+              <label>WhatsApp personal de la dueña <small style="font-weight:normal;color:#666">(opcional, para avisos de servicio)</small></label>
+              <input class="form-control" name="owner_phone" placeholder="525555555555" />
+              <div class="form-hint">Número PERSONAL de la dueña, distinto al del salón. Aquí le mandamos avisos operativos (sesión desconectada, resumen del día, etc.). Nunca recibe mensajes de clientas. Déjalo vacío si la dueña no quiere notificaciones personales.</div>
+            </div>
             <hr>
             <h3>Servicios iniciales</h3>
             <div class="alert alert-info">Agrega los servicios que ofrece el salón. Puedes agregar más después.</div>
@@ -335,6 +340,11 @@ export function createAdminPanel(db: Database.Database): Hono {
 
     const name = (form.get("name") as string | null)?.trim() ?? "";
     const phone = (form.get("phone") as string | null)?.trim() ?? "";
+    const ownerPhoneRaw =
+      (form.get("owner_phone") as string | null)?.trim() ?? "";
+    // Empty string → null at the boundary so it doesn't violate the
+    // "undefined leaves untouched / null clears" contract in updateSalon.
+    const owner_phone = ownerPhoneRaw === "" ? null : ownerPhoneRaw;
 
     if (!name || !phone) {
       return c.html(
@@ -353,7 +363,7 @@ export function createAdminPanel(db: Database.Database): Hono {
       return c.html(
         layout(
           "Error",
-          '<div class="alert" style="background:#fee;border:1px solid #fcc;color:#c0392b">Teléfono inválido. Usa solo dígitos, formato 52XXXXXXXXXX (10-15 dígitos).</div><a href="/admin/salones/new?token=' +
+          '<div class="alert" style="background:#fee;border:1px solid #fcc;color:#c0392b">Teléfono del salón inválido. Usa solo dígitos, formato 52XXXXXXXXXX (10-15 dígitos).</div><a href="/admin/salones/new?token=' +
             adminToken +
             '" class="btn btn-secondary">← Volver</a>',
           adminToken,
@@ -362,7 +372,38 @@ export function createAdminPanel(db: Database.Database): Hono {
       );
     }
 
-    const salon = createSalon(db, { name, phone });
+    if (owner_phone !== null && !isValidPhone(owner_phone)) {
+      return c.html(
+        layout(
+          "Error",
+          '<div class="alert" style="background:#fee;border:1px solid #fcc;color:#c0392b">WhatsApp de la dueña inválido. Solo dígitos, 10-15 caracteres. Déjalo vacío si no aplica.</div><a href="/admin/salones/new?token=' +
+            adminToken +
+            '" class="btn btn-secondary">← Volver</a>',
+          adminToken,
+        ),
+        400,
+      );
+    }
+
+    if (owner_phone !== null && owner_phone === phone) {
+      return c.html(
+        layout(
+          "Error",
+          '<div class="alert" style="background:#fee;border:1px solid #fcc;color:#c0392b">El WhatsApp personal de la dueña debe ser DIFERENTE al del salón. Si son el mismo número, déjalo vacío.</div><a href="/admin/salones/new?token=' +
+            adminToken +
+            '" class="btn btn-secondary">← Volver</a>',
+          adminToken,
+        ),
+        400,
+      );
+    }
+    // TODO(audit-W3, follow-up): when the owner-notification sender lands,
+    // also check that owner_phone doesn't collide with ANOTHER salon's
+    // `phone` (a Baileys-bound client line) via getSalonByPhone(owner_phone).
+    // Sending to that JID would land in a clientas inbox. Cross-salon owner
+    // sharing is otherwise allowed (one dueña, multiple salones).
+
+    const salon = createSalon(db, { name, phone, owner_phone });
 
     // Create services (array fields)
     const svcNames = form.getAll("svc_name[]") as string[];
@@ -442,9 +483,14 @@ export function createAdminPanel(db: Database.Database): Hono {
                 <input class="form-control" name="name" value="${escapeHtml(salon.name)}" required />
               </div>
               <div class="form-group">
-                <label>WhatsApp del salón <small style="font-weight:normal;color:#666">(la línea de la dueña, solo dígitos sin +)</small></label>
-                <input class="form-control" name="phone" value="${escapeHtml(salon.phone)}" required pattern="\d{10,15}" title="Solo dígitos, 10-15 caracteres" />
+                <label>WhatsApp del salón <small style="font-weight:normal;color:#666">(la línea de las clientas, solo dígitos sin +)</small></label>
+                <input class="form-control" name="phone" value="${escapeHtml(salon.phone)}" required pattern="[0-9]{10,15}" title="Solo dígitos, 10-15 caracteres" />
               </div>
+            </div>
+            <div class="form-group">
+              <label>WhatsApp personal de la dueña <small style="font-weight:normal;color:#666">(opcional, para avisos de servicio)</small></label>
+              <input class="form-control" name="owner_phone" value="${escapeHtml(salon.owner_phone ?? "")}" pattern="[0-9]{10,15}" title="Solo dígitos, 10-15 caracteres" placeholder="Déjalo vacío si la dueña no quiere notificaciones personales" />
+              <div class="form-hint">Distinto al WhatsApp del salón. Solo recibe avisos operativos (sesión desconectada, resumen del día). Nunca mensajes de clientas.</div>
             </div>
             <button type="submit" class="btn btn-primary">Guardar cambios</button>
           </form>
@@ -517,14 +563,49 @@ export function createAdminPanel(db: Database.Database): Hono {
     const form = await c.req.formData();
     const name = (form.get("name") as string | null)?.trim();
     const phone = (form.get("phone") as string | null)?.trim();
+    // owner_phone is intentionally tri-state on edit:
+    //   missing field        -> undefined (leave untouched)
+    //   present + empty      -> null (CLEAR the existing value)
+    //   present + non-empty  -> validate + set
+    const ownerPhoneField = form.get("owner_phone");
+    let owner_phone: string | null | undefined = undefined;
+    if (ownerPhoneField !== null) {
+      const trimmed = (ownerPhoneField as string).trim();
+      owner_phone = trimmed === "" ? null : trimmed;
+    }
 
     if (phone && !isValidPhone(phone)) {
-      return c.text("Teléfono inválido. Solo dígitos, 10-15 caracteres.", 400);
+      return c.text(
+        "Teléfono del salón inválido. Solo dígitos, 10-15 caracteres.",
+        400,
+      );
+    }
+    if (
+      typeof owner_phone === "string" &&
+      owner_phone !== "" &&
+      !isValidPhone(owner_phone)
+    ) {
+      return c.text(
+        "WhatsApp de la dueña inválido. Solo dígitos, 10-15 caracteres, o déjalo vacío.",
+        400,
+      );
+    }
+    // The DB has a UNIQUE constraint on `phone` but NOT on `owner_phone`
+    // (multiple salons could plausibly share an owner). We only block the
+    // same-as-salon collision because it would defeat the purpose of the
+    // separate notification channel.
+    const effectivePhone = phone ?? salon.phone;
+    if (typeof owner_phone === "string" && owner_phone === effectivePhone) {
+      return c.text(
+        "El WhatsApp de la dueña debe ser distinto al del salón. Si son el mismo número, déjalo vacío.",
+        400,
+      );
     }
 
     updateSalon(db, salon.id, {
       ...(name ? { name } : {}),
       ...(phone ? { phone } : {}),
+      ...(owner_phone !== undefined ? { owner_phone } : {}),
     });
 
     return c.redirect(`/admin/salones/${salon.id}?token=${adminToken}&saved=1`);

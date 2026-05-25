@@ -415,6 +415,56 @@ export function cancelAppointment(
   );
 }
 
+/** Mark an appointment as no-show. Used by the dueña's panel when a clienta
+ * doesn't arrive — feeds the dormancy detector. completePassedAppointments()
+ * skips no-show rows so `visit_count` doesn't inflate from a missed visit. */
+export function markNoShow(
+  db: Database.Database,
+  appointment_id: string,
+): void {
+  db.prepare("UPDATE appointments SET status = 'no_show' WHERE id = ?").run(
+    appointment_id,
+  );
+}
+
+/** A dashboard row: appointment joined with contact + service display fields.
+ * Used by the dueña's panel to render today/tomorrow without N+1 queries.
+ * Includes all non-terminal statuses (confirmed/cancelled/no_show) so the
+ * dueña can see what happened to a cancelled clienta. `completed` rows are
+ * excluded — past+confirmed flips to completed via completePassedAppointments. */
+export interface DashboardAppointment {
+  id: string;
+  starts_at: number;
+  ends_at: number;
+  status: Appointment["status"];
+  contact_name: string | null;
+  contact_phone: string;
+  service_name: string | null;
+}
+
+export function getAppointmentsForSalonBetween(
+  db: Database.Database,
+  salon_id: string,
+  from_unix: number,
+  to_unix: number,
+): DashboardAppointment[] {
+  return db
+    .prepare(
+      `SELECT a.id, a.starts_at, a.ends_at, a.status,
+              c.name AS contact_name, c.phone AS contact_phone,
+              s.name AS service_name
+         FROM appointments a
+         JOIN contacts c ON a.contact_id = c.id
+         LEFT JOIN services s ON a.service_id = s.id
+        WHERE a.salon_id = ?
+          AND a.starts_at >= ?
+          AND a.starts_at < ?
+          AND a.status IN ('confirmed', 'cancelled', 'no_show')
+        ORDER BY a.starts_at ASC`,
+    )
+    .all(salon_id, from_unix, to_unix) as DashboardAppointment[];
+}
+
 export function getAppointmentById(
   db: Database.Database,
   appointment_id: string,

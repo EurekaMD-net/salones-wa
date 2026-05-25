@@ -591,13 +591,16 @@ export function getCampaignStats(
   responded: number;
   booked: number;
 } {
+  // IFNULL(SUM(...), 0): SQLite SUM over zero rows returns NULL, which
+  // violates the declared `number` return type and rendered as the literal
+  // string "null" in the dueña-panel v1 stats footer ("null reactivadas").
   const row = db
     .prepare(
       `
     SELECT
       COUNT(*) as total,
-      SUM(responded) as responded,
-      SUM(booked) as booked
+      IFNULL(SUM(responded), 0) as responded,
+      IFNULL(SUM(booked), 0) as booked
     FROM campaigns
     WHERE salon_id = ?
   `,

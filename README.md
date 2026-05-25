@@ -9,10 +9,10 @@
 
 | Métrica                  | Valor                                                                 |
 | ------------------------ | --------------------------------------------------------------------- |
-| **Fase**                 | **En producción** — systemd activo, listo para conectar número WA     |
-| **Tests**                | **177 / 177 ✅**                                                      |
+| **Fase**                 | **En producción** — Salón Demo en vivo (525640501088)                 |
+| **Tests**                | **211 / 211 ✅**                                                      |
 | **Typecheck**            | 0 errores                                                             |
-| **Último commit**        | 2026-05-23                                                            |
+| **Último commit**        | 2026-05-25                                                            |
 | **Servicio**             | `salones-wa` (systemd, usuario dedicado, bind `127.0.0.1:8085`)       |
 | **URL pública (nip.io)** | `https://salones.187.77.25.101.nip.io`                                |
 | **Admin panel**          | `https://salones.187.77.25.101.nip.io/admin?token=salones-admin-2026` |

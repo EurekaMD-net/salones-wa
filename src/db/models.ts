@@ -465,6 +465,35 @@ export function getAppointmentsForSalonBetween(
     .all(salon_id, from_unix, to_unix) as DashboardAppointment[];
 }
 
+/** The next confirmed cita at or after `from_unix`, unbounded forward.
+ * Powers the "Próxima cita" banner — must not be capped to a 2-day window,
+ * or citas booked further out (which the dueña explicitly confirmed) become
+ * invisible. cancelled/no_show/completed all skipped — banner is forward-
+ * looking. */
+export function getNextConfirmedAppointmentForSalon(
+  db: Database.Database,
+  salon_id: string,
+  from_unix: number,
+): DashboardAppointment | null {
+  return (
+    (db
+      .prepare(
+        `SELECT a.id, a.starts_at, a.ends_at, a.status,
+                c.name AS contact_name, c.phone AS contact_phone,
+                s.name AS service_name
+           FROM appointments a
+           JOIN contacts c ON a.contact_id = c.id
+           LEFT JOIN services s ON a.service_id = s.id
+          WHERE a.salon_id = ?
+            AND a.starts_at >= ?
+            AND a.status = 'confirmed'
+          ORDER BY a.starts_at ASC
+          LIMIT 1`,
+      )
+      .get(salon_id, from_unix) as DashboardAppointment | undefined) ?? null
+  );
+}
+
 export function getAppointmentById(
   db: Database.Database,
   appointment_id: string,

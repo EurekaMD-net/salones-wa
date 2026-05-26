@@ -59,6 +59,9 @@ function mxTodayAt(hour: number): number {
 function mxTomorrowAt(hour: number): number {
   return mxTodayAt(hour) + 86_400;
 }
+function mxDaysFromNowAt(daysAhead: number, hour: number): number {
+  return mxTodayAt(hour) + 86_400 * daysAhead;
+}
 
 interface SeededFixture {
   salonId: string;
@@ -152,13 +155,58 @@ describe("Panel — dashboard render", () => {
     const res = await get(app, `/panel/dashboard?token=${fix.token}`);
     expect(res.status).toBe(200);
     const text = await res.text();
-    expect(text).toContain("No tienes citas pendientes hoy ni mañana");
+    // 2026-05-26: empty copy no longer scoped to "hoy ni mañana" since the
+    // banner now searches forward unboundedly — see fix below this block.
+    expect(text).toContain("No tienes citas pendientes");
+    expect(text).not.toContain("hoy ni mañana");
     expect(text).toContain("No hay citas hoy");
     expect(text).toContain("Sin citas mañana");
+    expect(text).toContain("Sin citas en los próximos días");
+  });
+
+  it("surfaces a confirmed cita 4 days out in the banner AND Próximas section (2026-05-26 unbounded-banner fix)", async () => {
+    // Regression for: a cita booked Friday on Monday rendered as "No tienes
+    // citas pendientes hoy ni mañana" — invisible to the dueña. Banner now
+    // unbounded forward + new "Próximas" section catches days +2..+7.
+    const fridaySecs = mxDaysFromNowAt(4, 12); // +4 days, 12:00 MX
+    createAppointment(db, {
+      salon_id: fix.salonId,
+      contact_id: fix.contactId,
+      service_id: fix.serviceId,
+      starts_at: fridaySecs,
+      ends_at: fridaySecs + 1800,
+    });
+    const text = await (
+      await get(app, `/panel/dashboard?token=${fix.token}`)
+    ).text();
+    // Banner: shows Próxima cita with the contact's name (not the empty
+    // state). The whenLabel for a +4 day cita is a weekday-date string,
+    // NOT "Hoy" / "Mañana".
+    expect(text).toContain("Próxima cita");
+    expect(text).toContain("María Test");
+    expect(text).not.toContain("No tienes citas pendientes");
+    // Próximas section header present.
+    expect(text).toContain("Próximas");
+    expect(text).toContain("esta semana");
+    expect(text).not.toContain("Sin citas en los próximos días");
+    // The Próximas section has a Día column the today/tomorrow tables lack.
+    expect(text).toContain("<th>Día</th>");
+    // The contact appears after the Próximas section header (in the
+    // upcoming table), proving the cita rendered there, not just the banner.
+    const proximasIdx = text.indexOf("Próximas");
+    const mariaIdx = text.indexOf("María Test", proximasIdx);
+    expect(mariaIdx).toBeGreaterThan(proximasIdx);
+    // W2 audit fold: the es-MX locale emits "vie 29 de may" by default.
+    // Under text-transform: capitalize that renders as "Vie 29 De May" —
+    // the capitalised "De" looks wrong. The label must NOT contain " de ".
+    expect(text).not.toMatch(/<td class="date-cell">[^<]*\sde\s/);
   });
 
   it("renders the próxima-cita banner with the next future appointment", async () => {
-    const futureSecs = mxTodayAt(23); // 23:00 MX — far in the future of any test-run hour
+    // Tomorrow @ 10:00 MX — robust to any test-run hour. The pre-existing
+    // mxTodayAt(23) seed was flaky after 23:00 MX (cita slips into the past
+    // mid-run, banner falls back to empty state).
+    const futureSecs = mxTomorrowAt(10);
     createAppointment(db, {
       salon_id: fix.salonId,
       contact_id: fix.contactId,
@@ -175,7 +223,11 @@ describe("Panel — dashboard render", () => {
     expect(text).toContain('href="tel:+525511112222"');
   });
 
-  it("includes a tomorrow row only in the tomorrow section, not the banner if today has one", async () => {
+  it("places the tomorrow row in the tomorrow section, even if it's also surfaced in the banner", async () => {
+    // The seed previously used mxTodayAt(23) + mxTomorrowAt(10) to anchor
+    // María "today" and Juana "tomorrow". After 23:00 MX local time today's
+    // slot is in the past, so the banner picks Juana — and lastIndexOf
+    // still lets us assert she renders inside the Mañana table too.
     const todaySecs = mxTodayAt(23);
     const tomorrowSecs = mxTomorrowAt(10);
     createAppointment(db, {
@@ -200,20 +252,22 @@ describe("Panel — dashboard render", () => {
     const text = await (
       await get(app, `/panel/dashboard?token=${fix.token}`)
     ).text();
-    // Banner shows María (the earlier confirmed row, today)
     const bannerIdx = text.indexOf("Próxima cita");
     const tomorrowHeaderIdx = text.indexOf("Mañana <span");
     expect(bannerIdx).toBeGreaterThan(-1);
     expect(tomorrowHeaderIdx).toBeGreaterThan(bannerIdx);
-    expect(text).toContain("María Test");
     expect(text).toContain("Juana Mañana");
-    // Juana shows up after the "Mañana" header.
-    expect(text.indexOf("Juana Mañana")).toBeGreaterThan(tomorrowHeaderIdx);
+    // Use lastIndexOf — Juana may also appear in the banner if today's row
+    // has slipped into the past at run-time. We only assert SHE'S IN THE
+    // TOMORROW SECTION, not that she's exclusive to it.
+    expect(text.lastIndexOf("Juana Mañana")).toBeGreaterThan(tomorrowHeaderIdx);
   });
 
   it("skips cancelled rows when picking the próxima-cita", async () => {
-    const earlyCancelled = mxTodayAt(20);
-    const laterConfirmed = mxTodayAt(22);
+    // Robust schedule: cancelled tomorrow @ 09:00, confirmed tomorrow @ 11:00.
+    // Both always-future so they're not silently flushed by test-run clock.
+    const earlyCancelled = mxTomorrowAt(9);
+    const laterConfirmed = mxTomorrowAt(11);
     const appt1 = createAppointment(db, {
       salon_id: fix.salonId,
       contact_id: fix.contactId,
@@ -239,9 +293,10 @@ describe("Panel — dashboard render", () => {
     const text = await (
       await get(app, `/panel/dashboard?token=${fix.token}`)
     ).text();
-    // Anchor on the unique next-name span inside the banner. find()'s
-    // status === 'confirmed' filter should skip cancelled María and pick
-    // Laura even though María sorts first.
+    // Anchor on the unique next-name span inside the banner. The
+    // status='confirmed' filter in getNextConfirmedAppointmentForSalon
+    // should skip cancelled María and pick Laura even though María sorts
+    // first.
     const nameMatch = text.match(/<span class="next-name">([^<]+)<\/span>/);
     expect(nameMatch).not.toBeNull();
     expect(nameMatch![1]).toBe("Laura Confirmed");

@@ -10,6 +10,7 @@ import {
   getSalonByToken,
   getCampaignStats,
   getAppointmentsForSalonBetween,
+  getNextConfirmedAppointmentForSalon,
   getAppointmentById,
   cancelAppointment,
   markNoShow,
@@ -63,6 +64,7 @@ function mxDayBounds(now: Date = new Date()): {
   todayStart: number;
   tomorrowStart: number;
   dayAfterStart: number;
+  weekEndStart: number;
 } {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: MX_TZ,
@@ -79,11 +81,29 @@ function mxDayBounds(now: Date = new Date()): {
   // for v1 since all current salons are in central MX.
   const todayStartMs = Date.UTC(y, m - 1, d, 6, 0, 0);
   const todayStart = Math.floor(todayStartMs / 1000);
+  // weekEndStart = start of day +8 → "Próximas" covers a rolling 6 days
+  // beyond tomorrow (days +2..+7). Not a calendar week — it slides daily.
   return {
     todayStart,
     tomorrowStart: todayStart + 86_400,
     dayAfterStart: todayStart + 86_400 * 2,
+    weekEndStart: todayStart + 86_400 * 8,
   };
+}
+
+/** Short weekday + day for citas 2+ days out. es-MX returns the literal
+ * "vie 29 de may" — under the panel's text-transform: capitalize CSS this
+ * renders as "Vie 29 De May", and the capitalised "De" looks wrong. We
+ * strip the infix " de " here so it renders as "Vie 29 May". */
+function fmtWeekdayMx(unixSecs: number): string {
+  return new Date(unixSecs * 1000)
+    .toLocaleDateString("es-MX", {
+      timeZone: MX_TZ,
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+    })
+    .replace(/\s+de\s+/g, " ");
 }
 
 function fmtTimeMx(unixSecs: number): string {
@@ -106,6 +126,7 @@ function renderApptRow(
   a: DashboardAppointment,
   token: string,
   showActions: boolean,
+  withDate = false,
 ): string {
   const name = a.contact_name ?? a.contact_phone;
   const phoneDigits = a.contact_phone.replace(/[^0-9]/g, "");
@@ -121,8 +142,11 @@ function renderApptRow(
         </form>
       </td>`
     : "<td></td>";
+  const dateCell = withDate
+    ? `<td class="date-cell">${esc(fmtWeekdayMx(a.starts_at))}</td>`
+    : "";
   return `<tr class="status-${a.status}">
-    <td class="time">${time}</td>
+    ${dateCell}<td class="time">${time}</td>
     <td class="who">
       <div class="name">${esc(name)} ${statusBadge(a.status)}</div>
       <a href="tel:+${esc(phoneDigits)}" class="phone">📞 ${esc(a.contact_phone)}</a>
@@ -171,7 +195,8 @@ export function createWebPanel(db: Database.Database): Hono {
     const token = c.req.query("token")!;
     const nowSecs = Math.floor(Date.now() / 1000);
 
-    const { todayStart, tomorrowStart, dayAfterStart } = mxDayBounds();
+    const { todayStart, tomorrowStart, dayAfterStart, weekEndStart } =
+      mxDayBounds();
     const todayAppts = getAppointmentsForSalonBetween(
       db,
       salon.id,
@@ -184,15 +209,19 @@ export function createWebPanel(db: Database.Database): Hono {
       tomorrowStart,
       dayAfterStart,
     );
+    const upcomingAppts = getAppointmentsForSalonBetween(
+      db,
+      salon.id,
+      dayAfterStart,
+      weekEndStart,
+    );
 
-    // Próxima cita = first confirmed row with starts_at >= now (cancelled /
-    // no_show rows are skipped — they're already past or invalid for "next").
-    const next =
-      todayAppts.find(
-        (a) => a.status === "confirmed" && a.starts_at >= nowSecs,
-      ) ??
-      tomorrowAppts.find((a) => a.status === "confirmed") ??
-      null;
+    // Próxima cita = next confirmed cita, UNBOUNDED forward. The previous
+    // implementation searched only today + tomorrow, which hid any cita
+    // booked 2+ days out — including ones the dueña had just confirmed
+    // through WhatsApp. The banner now answers "what's my next cita?"
+    // honestly, no matter how far out it is.
+    const next = getNextConfirmedAppointmentForSalon(db, salon.id, nowSecs);
 
     const todayConfirmed = todayAppts.filter(
       (a) => a.status === "confirmed",
@@ -211,13 +240,18 @@ export function createWebPanel(db: Database.Database): Hono {
       ? (() => {
           const name = next.contact_name ?? next.contact_phone;
           const phoneDigits = next.contact_phone.replace(/[^0-9]/g, "");
-          const isToday = next.starts_at < tomorrowStart;
-          const whenLabel = isToday ? "Hoy" : "Mañana";
+          // Three-way label: Hoy / Mañana / weekday-date. Anything ≥ +2 days
+          // out gets a weekday label so the dueña sees "Vie 29 may" instead
+          // of being told it's "Mañana" when it's really four days away.
+          let whenLabel: string;
+          if (next.starts_at < tomorrowStart) whenLabel = "Hoy";
+          else if (next.starts_at < dayAfterStart) whenLabel = "Mañana";
+          else whenLabel = fmtWeekdayMx(next.starts_at);
           const time = fmtTimeMx(next.starts_at);
           return `<div class="next-banner">
             <div class="next-label">Próxima cita</div>
             <div class="next-main">
-              <span class="next-when">${whenLabel} · ${time}</span>
+              <span class="next-when">${esc(whenLabel)} · ${time}</span>
               <span class="next-name">${esc(name)}</span>
             </div>
             <div class="next-sub">
@@ -226,13 +260,16 @@ export function createWebPanel(db: Database.Database): Hono {
             </div>
           </div>`;
         })()
-      : `<div class="next-banner next-banner-empty">No tienes citas pendientes hoy ni mañana</div>`;
+      : `<div class="next-banner next-banner-empty">No tienes citas pendientes</div>`;
 
     const todayRows = todayAppts
       .map((a) => renderApptRow(a, token, true))
       .join("");
     const tomorrowRows = tomorrowAppts
       .map((a) => renderApptRow(a, token, true))
+      .join("");
+    const upcomingRows = upcomingAppts
+      .map((a) => renderApptRow(a, token, true, true))
       .join("");
     const todaySection =
       todayAppts.length === 0
@@ -242,6 +279,10 @@ export function createWebPanel(db: Database.Database): Hono {
       tomorrowAppts.length === 0
         ? '<div class="empty">Sin citas mañana</div>'
         : `<table><thead><tr><th>Hora</th><th>Clienta</th><th>Servicio</th><th></th></tr></thead><tbody>${tomorrowRows}</tbody></table>`;
+    const upcomingSection =
+      upcomingAppts.length === 0
+        ? '<div class="empty">Sin citas en los próximos días</div>'
+        : `<table><thead><tr><th>Día</th><th>Hora</th><th>Clienta</th><th>Servicio</th><th></th></tr></thead><tbody>${upcomingRows}</tbody></table>`;
 
     const todayLabel = new Date(todayStart * 1000).toLocaleDateString("es-MX", {
       timeZone: MX_TZ,
@@ -294,6 +335,7 @@ export function createWebPanel(db: Database.Database): Hono {
     th, td { padding: 10px 8px; text-align: left; font-size: 0.85rem; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
     th { background: #fafafa; color: #888; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
     tr:last-child td { border-bottom: none; }
+    td.date-cell { font-weight: 500; color: #555; white-space: nowrap; text-transform: capitalize; }
     td.time { font-weight: 600; color: #25D366; white-space: nowrap; }
     td.who .name { font-weight: 500; }
     td.who .phone { display: inline-block; font-size: 0.78rem; color: #25D366; text-decoration: none; margin-top: 2px; }
@@ -337,6 +379,11 @@ export function createWebPanel(db: Database.Database): Hono {
   <div class="section">
     <h2>Mañana <span class="date">${tomorrowLabel}</span></h2>
     ${tomorrowSection}
+  </div>
+
+  <div class="section upcoming">
+    <h2>Próximas <span class="date">esta semana</span></h2>
+    ${upcomingSection}
   </div>
 
   <div class="stats-footer">

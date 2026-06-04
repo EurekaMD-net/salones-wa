@@ -418,6 +418,28 @@ export function updateDormantFlags(db: Database.Database): number {
 
 // ─── Appointments ─────────────────────────────────────────────────────────────
 
+/**
+ * Thrown when an INSERT would create a SECOND confirmed appointment at a slot
+ * already taken (the idx_appointments_no_double_book partial unique index
+ * fires). Callers should catch this and re-offer alternatives rather than
+ * letting the raw SqliteError surface as silence to the clienta. The realistic
+ * trigger is two clientas picking the same offered slot across the gap between
+ * the offer message and their reply.
+ */
+export class SlotTakenError extends Error {
+  constructor() {
+    super("slot_taken");
+    this.name = "SlotTakenError";
+  }
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err as { code?: string }).code === "SQLITE_CONSTRAINT_UNIQUE"
+  );
+}
+
 export function createAppointment(
   db: Database.Database,
   data: {
@@ -429,19 +451,27 @@ export function createAppointment(
   },
 ): Appointment {
   const id = randomUUID();
-  db.prepare(
-    `
+  try {
+    db.prepare(
+      `
     INSERT INTO appointments (id, salon_id, contact_id, service_id, starts_at, ends_at)
     VALUES (?, ?, ?, ?, ?, ?)
   `,
-  ).run(
-    id,
-    data.salon_id,
-    data.contact_id,
-    data.service_id ?? null,
-    data.starts_at,
-    data.ends_at,
-  );
+    ).run(
+      id,
+      data.salon_id,
+      data.contact_id,
+      data.service_id ?? null,
+      data.starts_at,
+      data.ends_at,
+    );
+  } catch (err) {
+    // appointments' only UNIQUE is the double-book partial index, so any
+    // unique violation here IS a slot collision — translate it to a typed
+    // error the message handler can recover from.
+    if (isUniqueViolation(err)) throw new SlotTakenError();
+    throw err;
+  }
   return db
     .prepare("SELECT * FROM appointments WHERE id = ?")
     .get(id) as Appointment;

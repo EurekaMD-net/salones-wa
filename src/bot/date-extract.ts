@@ -55,8 +55,16 @@ export const DAY_OF_MONTH_RE = new RegExp(
   "i",
 );
 
-/** "15/3", "15-3" — numeric date, Mexican DD/MM convention (day first). */
-export const NUMERIC_DATE_RE = /\b(\d{1,2})[/-](\d{1,2})\b/;
+/**
+ * "15/3" — numeric date, Mexican DD/MM convention (day first). SLASH ONLY,
+ * deliberately: a dash separator collides with time ranges Mexican clientas
+ * write constantly ("entre 4-5 de la tarde", "tipo 3-4 pm") — reading "4-5"
+ * as May-4 silently books the wrong day. A date detector is precision-biased:
+ * a miss just asks her to rephrase ("15/3" or "15 de marzo" both still work),
+ * but a false positive relocates the appointment. So we never treat a dash
+ * pair as a date.
+ */
+export const NUMERIC_DATE_RE = /\b(\d{1,2})\/(\d{1,2})\b/;
 
 /**
  * Build a Date at local midnight, rejecting non-existent calendar days.
@@ -193,7 +201,7 @@ const HINT_PATTERNS: RegExp[] = [
   /\b(hoy|mañana|ma[nñ]ana)\b/i,
   /\b(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b/i,
   DAY_OF_MONTH_RE,
-  /\b\d{1,2}[/-]\d{1,2}\b/,
+  /\b\d{1,2}\/\d{1,2}\b/, // slash-only, see NUMERIC_DATE_RE
 ];
 
 /**

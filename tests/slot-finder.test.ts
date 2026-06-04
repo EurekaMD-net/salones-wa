@@ -5,13 +5,16 @@ import {
   createAppointment,
   cancelAppointment,
   upsertContact,
+  SlotTakenError,
 } from "../src/db/models.js";
 import {
   findAvailableSlots,
   checkCustomTime,
   findAlternativesAround,
 } from "../src/bot/slot-finder.js";
+import BetterSqlite3 from "better-sqlite3";
 import type Database from "better-sqlite3";
+import { SCHEMA_SQL } from "../src/db/schema.js";
 import { randomUUID } from "node:crypto";
 
 let db: Database.Database;
@@ -396,7 +399,58 @@ describe("double-booking backstop (#3 — partial unique index)", () => {
         starts_at: startSec,
         ends_at: startSec + 3600,
       }),
-    ).toThrow(/UNIQUE constraint/i);
+    ).toThrow(SlotTakenError); // raw UNIQUE error is translated to a typed one
+  });
+
+  it("dedupe migration collapses a pre-existing dup so the index applies on a legacy DB (C1)", () => {
+    // Simulate a legacy DB that predates the index and already holds a
+    // double-booked pair: build the schema, drop the index, insert two
+    // confirmed rows at the same (salon, starts_at), then RE-APPLY SCHEMA_SQL
+    // (what every boot does). The pre-flight dedupe must collapse the dup so
+    // CREATE UNIQUE INDEX succeeds instead of throwing and failing boot.
+    const legacy = new BetterSqlite3(":memory:");
+    legacy.exec(SCHEMA_SQL);
+    legacy.exec("DROP INDEX idx_appointments_no_double_book");
+    const salon = createSalon(legacy, { name: "Legacy", phone: "+5255000077" });
+    const c = upsertContact(legacy, {
+      salon_id: salon.id,
+      phone: "+5255000088",
+    });
+    const startSec = Math.floor(FIXED_NOW / 1000) + 5 * 86400;
+    // Index is gone → both confirmed inserts succeed (the legacy double-book).
+    createAppointment(legacy, {
+      salon_id: salon.id,
+      contact_id: c.id,
+      starts_at: startSec,
+      ends_at: startSec + 3600,
+    });
+    createAppointment(legacy, {
+      salon_id: salon.id,
+      contact_id: c.id,
+      starts_at: startSec,
+      ends_at: startSec + 3600,
+    });
+    expect(
+      (
+        legacy
+          .prepare(
+            "SELECT COUNT(*) n FROM appointments WHERE status='confirmed' AND starts_at=?",
+          )
+          .get(startSec) as { n: number }
+      ).n,
+    ).toBe(2);
+
+    // Re-applying the schema must NOT throw (dedupe runs before the index).
+    expect(() => legacy.exec(SCHEMA_SQL)).not.toThrow();
+    const confirmed = (
+      legacy
+        .prepare(
+          "SELECT COUNT(*) n FROM appointments WHERE status='confirmed' AND starts_at=?",
+        )
+        .get(startSec) as { n: number }
+    ).n;
+    expect(confirmed).toBe(1); // dup collapsed (one kept, the rest cancelled)
+    legacy.close();
   });
 
   it("allows re-booking a slot after the prior appointment is cancelled", () => {

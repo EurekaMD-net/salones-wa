@@ -14,6 +14,7 @@ import {
   upsertContact,
   getServices,
   createAppointment,
+  SlotTakenError,
   cancelAppointment,
   getNextAppointmentForContact,
   getAppointmentById,
@@ -156,16 +157,55 @@ export async function handleInboundMessage(
 
     if (!isNaN(slotNumber) && slotNumber >= 1 && slotNumber <= slots.length) {
       const slot = slots[slotNumber - 1];
-      const appt = createAppointment(db, {
-        salon_id,
-        contact_id: contact.id,
-        service_id: state.pending_service_id,
-        starts_at: slot.starts_at,
-        ends_at: slot.ends_at,
-      });
-
       const services = getServices(db, salon_id);
       const service = services.find((s) => s.id === state.pending_service_id);
+
+      let appt;
+      try {
+        appt = createAppointment(db, {
+          salon_id,
+          contact_id: contact.id,
+          service_id: state.pending_service_id,
+          starts_at: slot.starts_at,
+          ends_at: slot.ends_at,
+        });
+      } catch (e) {
+        // The offered slot was taken by another clienta between the offer
+        // message and this pick (cross-round-trip race; the double-book
+        // index fired). Re-offer alternatives near her intended time instead
+        // of leaving her in silence.
+        if (e instanceof SlotTakenError) {
+          const durationMin =
+            service?.duration_min ?? DEFAULT_SLOT_DURATION_MIN;
+          const alts = findAlternativesAround(
+            db,
+            salon_id,
+            durationMin,
+            slot.starts_at,
+            { count: 3 },
+          );
+          if (alts.length === 0) {
+            conversationState.clear(salon_id, fromPhone);
+            return { reply: Messages.customTimeUnavailable([]) };
+          }
+          conversationState.set(
+            {
+              step: "awaiting_slot_selection",
+              salon_id,
+              contact_id: contact.id,
+              pending_service_id: state.pending_service_id,
+              pending_slots: alts,
+              campaign_id: state.campaign_id,
+              updated_at: Date.now(),
+            },
+            fromPhone,
+          );
+          return {
+            reply: Messages.customTimeUnavailable(alts.map((s) => s.label)),
+          };
+        }
+        throw e;
+      }
 
       // If came from reactivation, mark it booked
       if (state.campaign_id) {
@@ -215,6 +255,11 @@ export async function handleInboundMessage(
       // W2: guard against null (e.g. cancelled out-of-band between offer and pick).
       const old = getAppointmentById(db, oldId);
 
+      const services = getServices(db, salon_id);
+      const service = state.pending_service_id
+        ? services.find((s) => s.id === state.pending_service_id)
+        : undefined;
+
       // Atomic cancel-old + create-new (audit C1). If either fails the
       // transaction rolls back; user ends up unchanged rather than with two
       // active appointments (silent double-booking) or zero (recoverable).
@@ -231,12 +276,46 @@ export async function handleInboundMessage(
           ends_at: slot.ends_at,
         });
       });
-      const appt = tx();
-
-      const services = getServices(db, salon_id);
-      const service = state.pending_service_id
-        ? services.find((s) => s.id === state.pending_service_id)
-        : undefined;
+      let appt;
+      try {
+        appt = tx();
+      } catch (e) {
+        // Slot taken between offer and pick. The transaction rolled back, so
+        // the original appointment is intact — re-offer alternatives and keep
+        // the reschedule in flight rather than dropping the clienta in silence.
+        if (e instanceof SlotTakenError) {
+          const durationMin =
+            service?.duration_min ?? DEFAULT_SLOT_DURATION_MIN;
+          const alts = findAlternativesAround(
+            db,
+            salon_id,
+            durationMin,
+            slot.starts_at,
+            { count: 3 },
+          );
+          if (alts.length === 0) {
+            conversationState.clear(salon_id, fromPhone);
+            return { reply: Messages.customTimeUnavailable([]) };
+          }
+          conversationState.set(
+            {
+              step: "awaiting_reschedule_slot_selection",
+              salon_id,
+              contact_id: contact.id,
+              pending_service_id: state.pending_service_id,
+              pending_slots: alts,
+              pending_reschedule_old_id: oldId,
+              campaign_id: state.campaign_id,
+              updated_at: Date.now(),
+            },
+            fromPhone,
+          );
+          return {
+            reply: Messages.customTimeUnavailable(alts.map((s) => s.label)),
+          };
+        }
+        throw e;
+      }
 
       conversationState.clear(salon_id, fromPhone);
       return {

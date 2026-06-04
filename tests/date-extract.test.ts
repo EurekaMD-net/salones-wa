@@ -59,12 +59,6 @@ describe("extractDay — numeric 'DD/MM'", () => {
     expect(d.getDate()).toBe(15);
   });
 
-  it("accepts a dash separator", () => {
-    const d = extractDay("20-12", NOW)!;
-    expect(d.getMonth()).toBe(11);
-    expect(d.getDate()).toBe(20);
-  });
-
   it("returns null for an out-of-range month", () => {
     expect(extractDay("15/20", NOW)).toBeNull();
   });
@@ -72,6 +66,26 @@ describe("extractDay — numeric 'DD/MM'", () => {
   it("does not mistake a clock time for a numeric date", () => {
     // Colon-separated times must not be read as DD/MM.
     expect(extractDay("16:00", NOW)).toBeNull();
+  });
+
+  it("does NOT treat a dash pair as a date (time-range guard, C2)", () => {
+    // "entre 4-5 de la tarde" is a time range, not May 4. Slash-only numeric
+    // dates keep the dash free for ranges.
+    expect(extractDay("entre 4-5 de la tarde", NOW)).toBeNull();
+    expect(extractDay("tipo 3-4 pm", NOW)).toBeNull();
+  });
+});
+
+describe("date/time-range collision regressions (C2 / W1)", () => {
+  it("'entre 4-5 de la tarde' names no day → null (not May 4)", () => {
+    expect(extractDay("entre 4-5 de la tarde", NOW)).toBeNull();
+  });
+
+  it("'el viernes entre 4-5 de la tarde' → Friday 16:00 (weekday wins, time survives)", () => {
+    const d = parseSpanishDateTime("el viernes entre 4-5 de la tarde", NOW_MS)!;
+    expect(d).not.toBeNull();
+    expect(d.getDay()).toBe(5);
+    expect(d.getHours()).toBe(16);
   });
 });
 

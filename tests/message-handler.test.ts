@@ -5,7 +5,9 @@ import {
   addService,
   upsertContact,
   createAppointment,
+  getServices,
 } from "../src/db/models.js";
+import { findAvailableSlots } from "../src/bot/slot-finder.js";
 import { handleInboundMessage } from "../src/bot/message-handler.js";
 import { conversationState } from "../src/bot/conversation-state.js";
 import type Database from "better-sqlite3";
@@ -365,6 +367,55 @@ describe("handleInboundMessage", () => {
 
       const result = await send("no gracias");
       expect(result.reply).toContain("cuando gustes");
+    });
+  });
+
+  describe("double-book race on offered slot (W2)", () => {
+    it("re-offers (no silence, no double-book) when the picked slot was just taken", async () => {
+      const service = getServices(db, salonId)[0]!;
+      const slot = findAvailableSlots(db, salonId, service.duration_min, {
+        count: 1,
+      })[0]!;
+
+      // Another clienta books that exact slot between the offer and our pick.
+      const other = upsertContact(db, {
+        salon_id: salonId,
+        phone: "+5255199999",
+      });
+      createAppointment(db, {
+        salon_id: salonId,
+        contact_id: other.id,
+        service_id: service.id,
+        starts_at: slot.starts_at,
+        ends_at: slot.ends_at,
+      });
+
+      // Our clienta was offered the same slot and now selects it.
+      const me = upsertContact(db, { salon_id: salonId, phone: PHONE });
+      conversationState.set(
+        {
+          step: "awaiting_slot_selection",
+          salon_id: salonId,
+          contact_id: me.id,
+          pending_service_id: service.id,
+          pending_slots: [slot],
+          updated_at: Date.now(),
+        },
+        PHONE,
+      );
+
+      const result = await send("1");
+      // She gets a graceful re-offer, not silence and not a crash.
+      expect(result.reply).toMatch(/apartad|ofrecer|alternativ|1️⃣/);
+      // And only ONE confirmed appointment exists at that slot (no double-book).
+      const n = (
+        db
+          .prepare(
+            "SELECT COUNT(*) n FROM appointments WHERE starts_at=? AND status='confirmed'",
+          )
+          .get(slot.starts_at) as { n: number }
+      ).n;
+      expect(n).toBe(1);
     });
   });
 });

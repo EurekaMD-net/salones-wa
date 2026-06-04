@@ -81,6 +81,22 @@ CREATE INDEX IF NOT EXISTS idx_appointments_salon_status ON appointments(salon_i
 -- index is the last-resort guarantee against a future race or a multi-instance
 -- deploy. Partial (status='confirmed') so cancelled/no_show/completed rows at
 -- the same time don't block a legitimate re-book of a freed slot.
+--
+-- Pre-flight dedupe (idempotent): CREATE UNIQUE INDEX IF NOT EXISTS skips only
+-- when the index OBJECT exists — it still THROWS if existing DATA violates the
+-- constraint, which would fail service boot on a legacy DB that already holds a
+-- double-booked pair (exactly the race this index prevents). So first collapse
+-- any pre-existing exact-start confirmed duplicates, keeping the earliest row
+-- (lowest rowid ≈ first inserted) and cancelling the rest. On a clean DB this
+-- UPDATE matches 0 rows and is a no-op every boot.
+UPDATE appointments SET status = 'cancelled'
+WHERE status = 'confirmed'
+  AND rowid NOT IN (
+    SELECT MIN(rowid) FROM appointments
+    WHERE status = 'confirmed'
+    GROUP BY salon_id, starts_at
+  );
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_no_double_book
   ON appointments(salon_id, starts_at) WHERE status = 'confirmed';
 

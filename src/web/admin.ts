@@ -597,6 +597,26 @@ export function createAdminPanel(db: Database.Database): Hono {
         </div>
       </div>
 
+      <!-- Vinculación de WhatsApp -->
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-header"><h2>Vincular WhatsApp</h2></div>
+        <div class="card-body">
+          <p style="font-size:0.9rem;color:#555;margin-bottom:10px">
+            Desde el teléfono con el número del salón
+            (<strong style="font-family:monospace">${escapeHtml(salon.phone)}</strong>):
+            WhatsApp → ⋮ → <em>Dispositivos vinculados</em> → <em>Vincular un dispositivo</em>
+            → <em>Vincular con número de teléfono</em>, y escribe el código de 8 dígitos
+            que aparece en <code>journalctl -u salones-wa</code> al reiniciar el servicio.
+          </p>
+          <div class="alert alert-info" style="margin:0">
+            ⏳ <strong>Si la vinculación falla varias veces seguidas, espera ~24 h antes
+            de reintentar.</strong> Pedir códigos repetidamente hace que WhatsApp marque la
+            IP del servidor como sospechosa y rechace cada código nuevo; una pausa de un día
+            casi siempre la libera. Cada código vive ~50 s — vincula apenas aparezca.
+          </div>
+        </div>
+      </div>
+
       <!-- Zona de peligro -->
       <div class="card">
         <div class="card-header"><h2>Acciones</h2></div>

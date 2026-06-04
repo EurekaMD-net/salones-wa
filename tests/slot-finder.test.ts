@@ -3,6 +3,7 @@ import { initDb, resetDbSingleton } from "../src/db/database.js";
 import {
   createSalon,
   createAppointment,
+  cancelAppointment,
   upsertContact,
 } from "../src/db/models.js";
 import {
@@ -315,5 +316,105 @@ describe("findAvailableSlots", () => {
       // Sunday 9-10 = 1 valid 60-min slot
       expect(alts.length).toBeLessThanOrEqual(1);
     });
+  });
+});
+
+describe("findAvailableSlots — slotsPerDay", () => {
+  it("defaults to one slot per open day", () => {
+    // Wednesday (3) 09:00-13:00 → four 60-min slots possible.
+    seedWorkingHours([
+      { day_of_week: 3, start_time: "09:00", end_time: "13:00" },
+    ]);
+    const slots = findAvailableSlots(db, salonId, 60, {
+      nowMs: FIXED_NOW,
+      daysToScan: 7, // only Wed 2026-06-03 falls in range
+      count: 5,
+    });
+    expect(slots).toHaveLength(1);
+  });
+
+  it("returns multiple same-day slots when slotsPerDay is raised", () => {
+    seedWorkingHours([
+      { day_of_week: 3, start_time: "09:00", end_time: "13:00" },
+    ]);
+    const slots = findAvailableSlots(db, salonId, 60, {
+      nowMs: FIXED_NOW,
+      daysToScan: 7,
+      count: 10,
+      slotsPerDay: 4,
+    });
+    expect(slots).toHaveLength(4);
+    // All on the same Wednesday, distinct hours.
+    const dates = slots.map((s) => new Date(s.starts_at * 1000).getDate());
+    expect(new Set(dates).size).toBe(1);
+    const hours = slots.map((s) => new Date(s.starts_at * 1000).getHours());
+    expect(new Set(hours).size).toBe(4);
+  });
+});
+
+describe("findAlternativesAround — same-day different-hour (#4)", () => {
+  it("offers other hours on the anchor's own day, not just other days", () => {
+    // Wednesday 09:00-19:00 wide open; anchor at 15:00 on Wed 2026-06-03.
+    seedWorkingHours([
+      { day_of_week: 3, start_time: "09:00", end_time: "19:00" },
+    ]);
+    const anchor = Math.floor(
+      new Date("2026-06-03T21:00:00Z").getTime() / 1000, // 15:00 MX
+    );
+    const alts = findAlternativesAround(db, salonId, 60, anchor, {
+      nowMs: FIXED_NOW,
+      count: 3,
+    });
+    expect(alts.length).toBeGreaterThanOrEqual(2);
+    // Pre-fix (one-slot-per-day) these would all be on DIFFERENT days.
+    // Now at least two share the anchor's calendar day at different hours.
+    const days = alts.map((s) => new Date(s.starts_at * 1000).getDate());
+    const sameDayCount = days.filter((d) => d === 3).length;
+    expect(sameDayCount).toBeGreaterThanOrEqual(2);
+    const hours = alts.map((s) => new Date(s.starts_at * 1000).getHours());
+    expect(new Set(hours).size).toBe(hours.length); // all distinct hours
+  });
+});
+
+describe("double-booking backstop (#3 — partial unique index)", () => {
+  it("rejects a second CONFIRMED appointment at the same (salon, starts_at)", () => {
+    const startSec = Math.floor(FIXED_NOW / 1000) + 3 * 86400;
+    createAppointment(db, {
+      salon_id: salonId,
+      contact_id: contactId,
+      starts_at: startSec,
+      ends_at: startSec + 3600,
+    });
+    const other = upsertContact(db, {
+      salon_id: salonId,
+      phone: "+5255222200",
+    });
+    expect(() =>
+      createAppointment(db, {
+        salon_id: salonId,
+        contact_id: other.id,
+        starts_at: startSec,
+        ends_at: startSec + 3600,
+      }),
+    ).toThrow(/UNIQUE constraint/i);
+  });
+
+  it("allows re-booking a slot after the prior appointment is cancelled", () => {
+    const startSec = Math.floor(FIXED_NOW / 1000) + 4 * 86400;
+    const first = createAppointment(db, {
+      salon_id: salonId,
+      contact_id: contactId,
+      starts_at: startSec,
+      ends_at: startSec + 3600,
+    });
+    cancelAppointment(db, first.id); // status='cancelled' → excluded by partial index
+    expect(() =>
+      createAppointment(db, {
+        salon_id: salonId,
+        contact_id: contactId,
+        starts_at: startSec,
+        ends_at: startSec + 3600,
+      }),
+    ).not.toThrow();
   });
 });

@@ -910,3 +910,30 @@ describe("Admin Panel — Working hours UI", () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe("Admin Panel — WhatsApp linking advisory (#5)", () => {
+  let db: Database.Database;
+  let app: ReturnType<typeof makeApp>;
+  let salonId: string;
+  let salonPhone: string;
+
+  beforeEach(async () => {
+    db = initDb(":memory:");
+    app = makeApp(db);
+    const { createSalon } = await import("../db/models.js");
+    salonPhone = "525500000300";
+    salonId = createSalon(db, { name: "Salón Link", phone: salonPhone }).id;
+  });
+
+  it("detail page shows the linking instructions + 24h cool-down advisory", async () => {
+    const res = await get(
+      app,
+      `/admin/salones/${salonId}?token=${ADMIN_TOKEN}`,
+    );
+    const text = await res.text();
+    expect(text).toContain("Vincular WhatsApp");
+    expect(text).toContain("Dispositivos vinculados");
+    expect(text).toContain("24 h"); // cool-down advisory
+    expect(text).toContain(salonPhone); // names the salon's own line
+  });
+});

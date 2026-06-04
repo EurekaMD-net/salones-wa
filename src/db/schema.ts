@@ -75,6 +75,15 @@ CREATE TABLE IF NOT EXISTS appointments (
 CREATE INDEX IF NOT EXISTS idx_appointments_starts ON appointments(starts_at);
 CREATE INDEX IF NOT EXISTS idx_appointments_salon_status ON appointments(salon_id, status);
 
+-- Double-booking backstop: at most ONE confirmed appointment can start at a
+-- given (salon, starts_at). The app layer (findAvailableSlots / checkCustomTime)
+-- is the primary guard — it never offers a taken slot — but this partial unique
+-- index is the last-resort guarantee against a future race or a multi-instance
+-- deploy. Partial (status='confirmed') so cancelled/no_show/completed rows at
+-- the same time don't block a legitimate re-book of a freed slot.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_no_double_book
+  ON appointments(salon_id, starts_at) WHERE status = 'confirmed';
+
 -- Campañas de reactivación
 CREATE TABLE IF NOT EXISTS campaigns (
   id         TEXT PRIMARY KEY,

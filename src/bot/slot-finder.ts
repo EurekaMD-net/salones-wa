@@ -75,6 +75,12 @@ export interface FindSlotsOptions {
   minHoursAhead?: number;
   /** Optional: seed time for tests; defaults to Date.now(). */
   nowMs?: number;
+  /**
+   * Max non-conflicting slots to take per open day. Default 1 — variety
+   * beats density for a 3-option offer. findAlternativesAround raises this so
+   * same-day-different-hour alternatives can surface around a requested time.
+   */
+  slotsPerDay?: number;
 }
 
 export function findAvailableSlots(
@@ -87,6 +93,7 @@ export function findAvailableSlots(
   const daysToScan = options.daysToScan ?? 14;
   const minHoursAhead = options.minHoursAhead ?? 24;
   const nowMs = options.nowMs ?? Date.now();
+  const slotsPerDay = Math.max(1, options.slotsPerDay ?? 1);
 
   // 1. Working hours: from DB if present, otherwise defaults.
   const dbHours = db
@@ -130,8 +137,13 @@ export function findAvailableSlots(
     const windows = hoursByDay.get(dow);
     if (!windows) continue;
 
+    // Per-day budget: default 1 (one slot per day — variety beats density
+    // for a 3-option offer). findAlternativesAround raises it to surface
+    // same-day-different-hour options near a requested time.
+    let perDayCount = 0;
+
     for (const wh of windows) {
-      if (slots.length >= count) break;
+      if (slots.length >= count || perDayCount >= slotsPerDay) break;
 
       const { h: startH, m: startM } = parseHHMM(wh.start_time);
       const { h: endH, m: endM } = parseHHMM(wh.end_time);
@@ -142,6 +154,8 @@ export function findAvailableSlots(
       closesAt.setHours(endH, endM, 0, 0);
 
       while (candidate.getTime() + slotMs <= closesAt.getTime()) {
+        if (slots.length >= count || perDayCount >= slotsPerDay) break;
+
         const startSec = Math.floor(candidate.getTime() / 1000);
         const endSec = startSec + service_duration_min * 60;
 
@@ -161,8 +175,7 @@ export function findAvailableSlots(
             ends_at: endSec,
             label: formatLabel(startSec),
           });
-          // One slot per day — variety beats density for a 3-option offer.
-          break;
+          perDayCount++;
         }
 
         candidate.setTime(candidate.getTime() + slotMs);
@@ -253,14 +266,15 @@ export function checkCustomTime(
 /**
  * Find alternative slots near `anchorSec` for when the clienta's requested
  * custom time isn't available. Pulls a wider pool from `findAvailableSlots`
- * (which returns at most one slot per day), then sorts by absolute time
- * distance from `anchorSec` and takes the top N.
+ * with `slotsPerDay > 1` — so same-day-different-hour options DO surface —
+ * then sorts by absolute time distance from `anchorSec` and takes the top N.
  *
- * Audit W4 (2026-05-24): the prior docstring claimed "same day, then
- * adjacent days" which overstated what the code does. With the one-slot-
- * per-day rule, same-day alternatives at a different hour are never
- * surfaced. Future enhancement could pass a `preferTimeWithinDay` anchor
- * down to `findAvailableSlots`. For the 3-option MVP UX this is acceptable.
+ * 2026-06-04: raised slotsPerDay (was effectively 1, the old one-slot-per-day
+ * rule that the audit-W4 note flagged). A clienta who asks for "viernes 3pm"
+ * when 3pm is taken now gets offered 2pm / 4pm on the SAME Friday, not just
+ * the same hour on other days — which is what "near the requested time" should
+ * mean. The real-clock 24h lookahead floor is still enforced by
+ * findAvailableSlots.
  */
 export function findAlternativesAround(
   db: Database.Database,
@@ -270,22 +284,13 @@ export function findAlternativesAround(
   options: FindSlotsOptions & { count?: number } = {},
 ): OfferedSlot[] {
   const count = options.count ?? 3;
-  const anchor = new Date(anchorSec * 1000);
-  // Scan starts on the anchor's day; up to 7 days forward.
-  // Compose a temp "nowMs" that aligns the scan window with the anchor day.
-  // findAvailableSlots already enforces 24h-from-now lookahead, so we keep
-  // that real-clock floor — but bias the picked slots to be temporally
-  // close to the anchor by sorting after retrieval.
   const candidates = findAvailableSlots(db, salon_id, service_duration_min, {
     nowMs: options.nowMs,
     minHoursAhead: options.minHoursAhead,
-    count: 12, // pull a wider pool
+    count: 18, // wider pool so the distance sort has same-day options to pick
     daysToScan: 7,
+    slotsPerDay: 4, // surface a few hours per day, incl. the anchor's own day
   });
-
-  // Acknowledge `anchor` to satisfy the linter — kept available as a Date
-  // alias for future enhancements (e.g. same-day-priority filter).
-  void anchor;
 
   // Sort by absolute distance from anchor; take top N
   candidates.sort(

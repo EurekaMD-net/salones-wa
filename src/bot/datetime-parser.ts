@@ -16,73 +16,16 @@
  * Heuristic, not exhaustive — covers the common patterns Mexican salon
  * clientas actually type. Future: swap to a proper Spanish NLP library
  * (chrono-node has limited Spanish; date-fns parse needs strict format).
+ *
+ * The day extractor lives in ./date-extract.ts so the intent classifier and
+ * this parser share ONE definition of "what day did she name" — see that
+ * module's header for the sibling-divergence bug this consolidation fixed.
  */
 
-const DAYS_OF_WEEK: Record<string, number> = {
-  domingo: 0,
-  lunes: 1,
-  martes: 2,
-  miércoles: 3,
-  miercoles: 3,
-  jueves: 4,
-  viernes: 5,
-  sábado: 6,
-  sabado: 6,
-};
+import { extractDay, stripCalendarDateSpans } from "./date-extract.js";
 
 function normalize(text: string): string {
   return text.trim().toLowerCase();
-}
-
-function extractDay(text: string, now: Date): Date | null {
-  // Audit C1 (2026-05-24): strip TIME-QUALIFIER suffixes ("de la mañana /
-  // tarde / noche") BEFORE looking for day words. The bare /\bma[nñ]ana\b/
-  // check used to match the word "mañana" inside "de la mañana" → every
-  // clienta typing "[día] X de la mañana" got pushed to TOMORROW instead
-  // of the day she actually named ("viernes 9 de la mañana" → Tuesday 9am).
-  // Spanish-morning is the single most common appointment phrasing, so
-  // this was a Day-1 production bug.
-  const dayCorpus = text.replace(
-    /\bde\s+la\s+(ma[nñ]ana|tarde|noche)\b/gi,
-    " ",
-  );
-
-  // Day-of-week ALWAYS wins over relative-day tokens. If the clienta names
-  // a weekday, that's what she meant — relative-day words are fallbacks.
-  const wantsNextWeek = /\b(pr[oó]ximo|pr[oó]xima|siguiente|que viene)\b/.test(
-    dayCorpus,
-  );
-
-  for (const [name, dow] of Object.entries(DAYS_OF_WEEK)) {
-    const re = new RegExp(`\\b${name}\\b`, "i");
-    if (re.test(dayCorpus)) {
-      const d = new Date(now);
-      const currentDow = d.getDay();
-      let diff = dow - currentDow;
-      if (diff <= 0) diff += 7;
-      if (wantsNextWeek && diff < 7) diff += 7;
-      d.setDate(d.getDate() + diff);
-      return d;
-    }
-  }
-
-  // Relative-day fallbacks. Order matters: longer phrase first so
-  // "pasado mañana" doesn't match "mañana".
-  if (/\bpasado\s+ma[nñ]ana\b/.test(dayCorpus)) {
-    const d = new Date(now);
-    d.setDate(d.getDate() + 2);
-    return d;
-  }
-  if (/\bma[nñ]ana\b/.test(dayCorpus)) {
-    const d = new Date(now);
-    d.setDate(d.getDate() + 1);
-    return d;
-  }
-  if (/\bhoy\b/.test(dayCorpus)) {
-    return new Date(now);
-  }
-
-  return null;
 }
 
 interface TimeParts {
@@ -131,7 +74,9 @@ export function parseSpanishDateTime(text: string, nowMs: number): Date | null {
   const t = normalize(text);
   const day = extractDay(t, new Date(nowMs));
   if (!day) return null;
-  const time = extractTime(t);
+  // Strip the calendar-date span first so the day-of-month number in
+  // "15 de marzo" / "15/3" isn't misread by extractTime as the clock hour.
+  const time = extractTime(stripCalendarDateSpans(t));
   if (!time) return null;
   day.setHours(time.hour, time.minute, 0, 0);
   return day;

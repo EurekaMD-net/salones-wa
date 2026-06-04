@@ -3,6 +3,8 @@
  * Classifies inbound WA messages into typed intents.
  */
 
+import { findDateHint } from "./date-extract.js";
+
 export type Intent =
   | { type: "book"; service?: string; date?: string }
   | { type: "cancel" }
@@ -109,21 +111,6 @@ function extractService(text: string): string | undefined {
   return services.find((s) => lower.includes(s));
 }
 
-/** Very light date extraction — returns raw string hint if found */
-function extractDate(text: string): string | undefined {
-  const patterns = [
-    /\b(hoy|mañana|ma[nñ]ana)\b/i,
-    /\b(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b/i,
-    /\b\d{1,2}\s*de\s*(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b/i,
-    /\b\d{1,2}[\/\-]\d{1,2}\b/,
-  ];
-  for (const p of patterns) {
-    const m = text.match(p);
-    if (m) return m[0];
-  }
-  return undefined;
-}
-
 /**
  * Parse inbound message into a typed Intent.
  * @param text Raw WA message text
@@ -169,7 +156,7 @@ export function parseIntent(text: string, context?: "reactivation"): Intent {
     return {
       type: "book",
       service: extractService(trimmed),
-      date: extractDate(trimmed),
+      date: findDateHint(trimmed),
     };
   }
 

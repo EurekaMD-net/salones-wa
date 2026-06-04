@@ -236,6 +236,101 @@ export function getServices(
     .all(salon_id) as Service[];
 }
 
+// ─── Working hours (slots) ────────────────────────────────────────────────────
+
+export interface Slot {
+  id: string;
+  salon_id: string;
+  day_of_week: number; // 0=Sunday … 6=Saturday
+  start_time: string; // "HH:MM" 24h
+  end_time: string; // "HH:MM" 24h
+  active: number;
+}
+
+/** One open window for a weekday, as accepted by setSlotsForSalon. */
+export interface WorkingHourInput {
+  day_of_week: number; // 0–6
+  start_time: string; // "HH:MM"
+  end_time: string; // "HH:MM"
+}
+
+const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/**
+ * True when a working-hour window is well-formed: integer weekday 0–6,
+ * HH:MM 24h times, and start strictly before end. Exported so the admin
+ * handler and the model share ONE definition of "valid hours" — no drift
+ * between the HTTP-layer check and the persistence guard.
+ *
+ * Lexical `<` on zero-padded "HH:MM" is a valid chronological compare
+ * ("09:00" < "19:00"), and rejects zero-length windows ("09:00" === "09:00").
+ */
+export function isValidWorkingHour(w: WorkingHourInput): boolean {
+  if (
+    !Number.isInteger(w.day_of_week) ||
+    w.day_of_week < 0 ||
+    w.day_of_week > 6
+  )
+    return false;
+  if (!HHMM_RE.test(w.start_time) || !HHMM_RE.test(w.end_time)) return false;
+  return w.start_time < w.end_time;
+}
+
+/**
+ * All configured working-hour rows for a salon, ordered Mon→Sun then by
+ * start time. Returns [] when the operator hasn't configured any — callers
+ * (slot-finder) treat empty as "use the default Mon–Sat 9–19".
+ */
+export function getSlotsForSalon(
+  db: Database.Database,
+  salon_id: string,
+): Slot[] {
+  return db
+    .prepare(
+      `SELECT * FROM slots WHERE salon_id = ?
+       ORDER BY CASE day_of_week WHEN 0 THEN 7 ELSE day_of_week END, start_time`,
+    )
+    .all(salon_id) as Slot[];
+}
+
+/**
+ * Replace ALL working-hour windows for a salon in one transaction. Passing
+ * [] clears every window → the salon falls back to default hours in
+ * slot-finder. Validates every window BEFORE deleting, so a malformed input
+ * can never leave the salon with zero rows by accident (which would silently
+ * revert it to the default schedule).
+ */
+export function setSlotsForSalon(
+  db: Database.Database,
+  salon_id: string,
+  hours: WorkingHourInput[],
+): void {
+  for (const h of hours) {
+    if (!isValidWorkingHour(h)) {
+      throw new Error(
+        `[salones-wa] invalid working hour: ${JSON.stringify(h)}`,
+      );
+    }
+  }
+  const tx = db.transaction(() => {
+    db.prepare("DELETE FROM slots WHERE salon_id = ?").run(salon_id);
+    const insert = db.prepare(
+      `INSERT INTO slots (id, salon_id, day_of_week, start_time, end_time, active)
+       VALUES (?, ?, ?, ?, ?, 1)`,
+    );
+    for (const h of hours) {
+      insert.run(
+        randomUUID(),
+        salon_id,
+        h.day_of_week,
+        h.start_time,
+        h.end_time,
+      );
+    }
+  });
+  tx();
+}
+
 // ─── Contacts ────────────────────────────────────────────────────────────────
 
 export function upsertContact(

@@ -6,7 +6,15 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { initDb } from "../db/database.js";
 import { createAdminPanel } from "./admin.js";
-import { getSalonById, getAllSalons, getServices } from "../db/models.js";
+import {
+  getSalonById,
+  getAllSalons,
+  getServices,
+  getSlotsForSalon,
+  setSlotsForSalon,
+  isValidWorkingHour,
+} from "../db/models.js";
+import { findAvailableSlots } from "../bot/slot-finder.js";
 import type Database from "better-sqlite3";
 
 const ADMIN_TOKEN = "test-admin-token";
@@ -649,5 +657,256 @@ describe("Admin Panel — Service management", () => {
 
     const services = getServices(db, salonId);
     expect(services).toHaveLength(0);
+  });
+});
+
+describe("Working hours — model (getSlots/setSlots/isValid)", () => {
+  let db: Database.Database;
+  let salonId: string;
+
+  beforeEach(async () => {
+    db = initDb(":memory:");
+    const { createSalon } = await import("../db/models.js");
+    salonId = createSalon(db, {
+      name: "Salón Horas",
+      phone: "525500000100",
+    }).id;
+  });
+
+  it("isValidWorkingHour accepts a well-formed window", () => {
+    expect(
+      isValidWorkingHour({
+        day_of_week: 2,
+        start_time: "09:00",
+        end_time: "19:00",
+      }),
+    ).toBe(true);
+  });
+
+  it("isValidWorkingHour rejects bad weekday, bad HH:MM, and start>=end", () => {
+    expect(
+      isValidWorkingHour({
+        day_of_week: 7,
+        start_time: "09:00",
+        end_time: "10:00",
+      }),
+    ).toBe(false); // weekday out of range
+    expect(
+      isValidWorkingHour({
+        day_of_week: 1,
+        start_time: "9:00",
+        end_time: "10:00",
+      }),
+    ).toBe(false); // not zero-padded
+    expect(
+      isValidWorkingHour({
+        day_of_week: 1,
+        start_time: "25:00",
+        end_time: "26:00",
+      }),
+    ).toBe(false); // hour > 23
+    expect(
+      isValidWorkingHour({
+        day_of_week: 1,
+        start_time: "10:00",
+        end_time: "10:00",
+      }),
+    ).toBe(false); // zero-length
+    expect(
+      isValidWorkingHour({
+        day_of_week: 1,
+        start_time: "19:00",
+        end_time: "09:00",
+      }),
+    ).toBe(false); // inverted
+  });
+
+  it("setSlotsForSalon + getSlotsForSalon round-trip, ordered Mon→Sun", () => {
+    setSlotsForSalon(db, salonId, [
+      { day_of_week: 0, start_time: "10:00", end_time: "14:00" }, // Sunday
+      { day_of_week: 1, start_time: "09:00", end_time: "19:00" }, // Monday
+      { day_of_week: 6, start_time: "08:00", end_time: "13:00" }, // Saturday
+    ]);
+    const rows = getSlotsForSalon(db, salonId);
+    expect(rows.map((r) => r.day_of_week)).toEqual([1, 6, 0]); // Mon, Sat, Sun
+    expect(rows.every((r) => r.active === 1)).toBe(true);
+  });
+
+  it("setSlotsForSalon is replace-all (re-saving wipes the previous set)", () => {
+    setSlotsForSalon(db, salonId, [
+      { day_of_week: 1, start_time: "09:00", end_time: "19:00" },
+      { day_of_week: 2, start_time: "09:00", end_time: "19:00" },
+    ]);
+    expect(getSlotsForSalon(db, salonId)).toHaveLength(2);
+    setSlotsForSalon(db, salonId, [
+      { day_of_week: 3, start_time: "11:00", end_time: "15:00" },
+    ]);
+    const rows = getSlotsForSalon(db, salonId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.day_of_week).toBe(3);
+  });
+
+  it("setSlotsForSalon([]) clears all windows", () => {
+    setSlotsForSalon(db, salonId, [
+      { day_of_week: 1, start_time: "09:00", end_time: "19:00" },
+    ]);
+    setSlotsForSalon(db, salonId, []);
+    expect(getSlotsForSalon(db, salonId)).toHaveLength(0);
+  });
+
+  it("setSlotsForSalon throws on invalid window and does NOT delete existing rows", () => {
+    setSlotsForSalon(db, salonId, [
+      { day_of_week: 1, start_time: "09:00", end_time: "19:00" },
+    ]);
+    expect(() =>
+      setSlotsForSalon(db, salonId, [
+        { day_of_week: 2, start_time: "bad", end_time: "19:00" },
+      ]),
+    ).toThrow(/invalid working hour/);
+    // Validation runs BEFORE the delete → the prior schedule survives.
+    expect(getSlotsForSalon(db, salonId)).toHaveLength(1);
+  });
+
+  it("slot-finder honors operator-set hours end-to-end (only the open weekday is offered)", () => {
+    // Only Wednesday (day_of_week 3), 10:00–14:00.
+    setSlotsForSalon(db, salonId, [
+      { day_of_week: 3, start_time: "10:00", end_time: "14:00" },
+    ]);
+    const nowMs = new Date("2026-01-05T12:00:00Z").getTime(); // a Monday
+    const offered = findAvailableSlots(db, salonId, 60, {
+      count: 5,
+      daysToScan: 14,
+      minHoursAhead: 1,
+      nowMs,
+    });
+    expect(offered.length).toBeGreaterThan(0);
+    // Same process TZ for finder + assertion → consistent local weekday/hour.
+    for (const s of offered) {
+      const d = new Date(s.starts_at * 1000);
+      expect(d.getDay()).toBe(3); // Wednesday only
+      expect(d.getHours()).toBeGreaterThanOrEqual(10);
+      expect(d.getHours()).toBeLessThan(14);
+    }
+  });
+});
+
+describe("Admin Panel — Working hours UI", () => {
+  let db: Database.Database;
+  let app: ReturnType<typeof makeApp>;
+  let salonId: string;
+
+  beforeEach(async () => {
+    db = initDb(":memory:");
+    app = makeApp(db);
+    const { createSalon } = await import("../db/models.js");
+    salonId = createSalon(db, { name: "Salón UI", phone: "525500000200" }).id;
+  });
+
+  it("detail page shows the hours card + default-hours notice when none configured", async () => {
+    const res = await get(
+      app,
+      `/admin/salones/${salonId}?token=${ADMIN_TOKEN}`,
+    );
+    const text = await res.text();
+    expect(text).toContain("Horario de atención");
+    expect(text).toContain("horario por defecto");
+    expect(text).toContain('name="open_1"'); // Monday checkbox present
+  });
+
+  it("detail page pre-checks configured days and hides the default notice", async () => {
+    setSlotsForSalon(db, salonId, [
+      { day_of_week: 1, start_time: "08:30", end_time: "17:30" },
+    ]);
+    const res = await get(
+      app,
+      `/admin/salones/${salonId}?token=${ADMIN_TOKEN}`,
+    );
+    const text = await res.text();
+    expect(text).not.toContain("horario por defecto");
+    expect(text).toContain('name="open_1" value="1" checked');
+    expect(text).toContain('value="08:30"');
+  });
+
+  it("POST hours persists the marked days and redirects", async () => {
+    const res = await post(
+      app,
+      `/admin/salones/${salonId}/hours?token=${ADMIN_TOKEN}`,
+      {
+        open_1: "1",
+        start_1: "09:00",
+        end_1: "18:00",
+        open_3: "1",
+        start_3: "10:00",
+        end_3: "14:00",
+        // Tuesday left unmarked → closed
+        start_2: "09:00",
+        end_2: "19:00",
+      },
+    );
+    expect(res.status).toBe(302);
+    const rows = getSlotsForSalon(db, salonId);
+    expect(rows.map((r) => r.day_of_week)).toEqual([1, 3]);
+    expect(rows.find((r) => r.day_of_week === 3)!.end_time).toBe("14:00");
+  });
+
+  it("POST hours with nothing marked clears the schedule (reverts to default)", async () => {
+    setSlotsForSalon(db, salonId, [
+      { day_of_week: 1, start_time: "09:00", end_time: "19:00" },
+    ]);
+    const res = await post(
+      app,
+      `/admin/salones/${salonId}/hours?token=${ADMIN_TOKEN}`,
+      {},
+    );
+    expect(res.status).toBe(302);
+    expect(getSlotsForSalon(db, salonId)).toHaveLength(0);
+  });
+
+  it("POST hours rejects an invalid time with 400 and leaves the schedule untouched", async () => {
+    setSlotsForSalon(db, salonId, [
+      { day_of_week: 1, start_time: "09:00", end_time: "19:00" },
+    ]);
+    const res = await post(
+      app,
+      `/admin/salones/${salonId}/hours?token=${ADMIN_TOKEN}`,
+      {
+        open_2: "1",
+        start_2: "19:00",
+        end_2: "09:00", // inverted
+      },
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("Martes");
+    expect(getSlotsForSalon(db, salonId)).toHaveLength(1); // prior survives
+  });
+
+  it("POST hours returns 404 for an unknown salon", async () => {
+    const res = await post(
+      app,
+      `/admin/salones/nope/hours?token=${ADMIN_TOKEN}`,
+      {
+        open_1: "1",
+        start_1: "09:00",
+        end_1: "18:00",
+      },
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("POST hours without a matching Origin is rejected by CSRF (403)", async () => {
+    const req = new Request(
+      `http://localhost/admin/salones/${salonId}/hours?token=${ADMIN_TOKEN}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Host: "localhost",
+          // No Origin / Referer → CSRF check fails.
+        },
+        body: "open_1=1&start_1=09:00&end_1=18:00",
+      },
+    );
+    const res = await app.fetch(req);
+    expect(res.status).toBe(403);
   });
 });

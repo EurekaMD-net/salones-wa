@@ -23,7 +23,25 @@ import {
   createService,
   updateService,
   deleteService,
+  getSlotsForSalon,
+  setSlotsForSalon,
+  isValidWorkingHour,
+  type Slot,
+  type WorkingHourInput,
 } from "../db/models.js";
+
+/** Day labels indexed by day_of_week (0=Sunday … 6=Saturday). */
+const DAY_NAMES = [
+  "Domingo",
+  "Lunes",
+  "Martes",
+  "Miércoles",
+  "Jueves",
+  "Viernes",
+  "Sábado",
+];
+/** Render order: business week (Mon first), Sunday last. */
+const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
 /** Escape HTML to prevent XSS from DB strings rendered in templates */
 function escapeHtml(str: string): string {
@@ -464,6 +482,31 @@ export function createAdminPanel(db: Database.Database): Hono {
       )
       .join("");
 
+    // Working hours: one editable window per weekday. If the salon has 0
+    // configured rows, the bot uses the default Mon–Sat 9–19 (slot-finder
+    // fallback), so the form pre-fills with that default but leaves every day
+    // UNchecked — saving with nothing checked keeps the default.
+    const slots = getSlotsForSalon(db, salon.id);
+    const slotByDay = new Map<number, Slot>();
+    for (const s of slots) {
+      if (!slotByDay.has(s.day_of_week)) slotByDay.set(s.day_of_week, s);
+    }
+    const hoursRows = DAY_ORDER.map((d) => {
+      const slot = slotByDay.get(d);
+      const open = slot != null;
+      const start = slot?.start_time ?? "09:00";
+      const end = slot?.end_time ?? "19:00";
+      return `<div style="display:flex;align-items:center;gap:10px">
+          <label style="display:flex;align-items:center;gap:6px;width:120px;margin:0;font-weight:500">
+            <input type="checkbox" name="open_${d}" value="1" ${open ? "checked" : ""} />
+            ${DAY_NAMES[d]}
+          </label>
+          <input class="form-control" type="time" name="start_${d}" value="${start}" style="width:auto" />
+          <span style="color:#888">a</span>
+          <input class="form-control" type="time" name="end_${d}" value="${end}" style="width:auto" />
+        </div>`;
+    }).join("");
+
     const body = `
       <div style="margin-bottom:16px">
         <a href="/admin?token=${adminToken}" class="btn btn-secondary btn-sm">← Volver a lista</a>
@@ -531,6 +574,25 @@ export function createAdminPanel(db: Database.Database): Hono {
               </div>
               <button type="submit" class="btn btn-primary" style="height:38px">Agregar</button>
             </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Horario de atención -->
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-header"><h2>Horario de atención</h2></div>
+        <div class="card-body">
+          ${
+            slots.length === 0
+              ? '<div class="alert alert-info">Usando el horario por defecto: <strong>Lunes a Sábado, 9:00–19:00</strong>. Marca los días y ajusta las horas para personalizar. Si no marcas ningún día, se mantiene el horario por defecto.</div>'
+              : ""
+          }
+          <form method="POST" action="/admin/salones/${salon.id}/hours?token=${adminToken}">
+            <div style="display:grid;gap:8px;max-width:440px">
+              ${hoursRows}
+            </div>
+            <div style="margin-top:16px"><button type="submit" class="btn btn-primary">Guardar horario</button></div>
+            <p class="form-hint" style="margin-top:8px">Los días sin marcar se consideran cerrados. Un turno continuo por día. El bot solo ofrece citas dentro de estas horas.</p>
           </form>
         </div>
       </div>
@@ -620,6 +682,39 @@ export function createAdminPanel(db: Database.Database): Hono {
 
     setSalonActive(db, salon.id, !salon.active);
     return c.redirect(`/admin?token=${adminToken}`);
+  });
+
+  // ─── POST /admin/salones/:id/hours — guardar horario de atención ─────
+  app.post("/admin/salones/:id/hours", async (c) => {
+    if (!checkCsrf(c)) return c.text("Solicitud inválida", 403);
+    const adminToken = c.req.query("token")!;
+    const salon = getSalonById(db, c.req.param("id"));
+    if (!salon) return c.text("Salón no encontrado", 404);
+
+    const form = await c.req.formData();
+    const hours: WorkingHourInput[] = [];
+    for (const d of DAY_ORDER) {
+      // Day not marked "abierto" → closed → no row.
+      if (form.get(`open_${d}`) == null) continue;
+      const start = (form.get(`start_${d}`) as string | null)?.trim() ?? "";
+      const end = (form.get(`end_${d}`) as string | null)?.trim() ?? "";
+      const window: WorkingHourInput = {
+        day_of_week: d,
+        start_time: start,
+        end_time: end,
+      };
+      if (!isValidWorkingHour(window)) {
+        return c.text(
+          `Horario inválido para ${DAY_NAMES[d]}: usa HH:MM con la hora de apertura antes de la de cierre.`,
+          400,
+        );
+      }
+      hours.push(window);
+    }
+
+    // Replace-all (empty array clears → salon reverts to default hours).
+    setSlotsForSalon(db, salon.id, hours);
+    return c.redirect(`/admin/salones/${salon.id}?token=${adminToken}&saved=1`);
   });
 
   // ─── POST /admin/salones/:id/services — agregar servicio ─────────────

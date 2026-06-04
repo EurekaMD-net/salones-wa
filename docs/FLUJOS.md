@@ -74,6 +74,10 @@ Bot:      "✅ Listo! Quedas agendada:
 Clienta:  "4"
 Bot:      "¿Qué día y hora te queda mejor? 📅
            Por ejemplo: viernes 4pm, mañana 11am, sábado a las 5"
+# Formatos de fecha que el parser entiende: día de la semana (viernes),
+# relativos (hoy / mañana / pasado mañana), "N de <mes>" (15 de marzo) y
+# numérico DD/MM con DIAGONAL (15/3). El guion se reserva para rangos de
+# hora ("entre 4-5 de la tarde") — no se interpreta como fecha.
 
 Clienta:  "viernes 4pm"
 
@@ -83,6 +87,9 @@ Clienta:  "sí"
 Bot:      "✅ ¡Listo! Tu cita es el viernes 30 de mayo a las 04:00 p.m. para Corte."
 
 [Caso 2 — ocupado, hay alternativas]
+# Desde 2026-06-04 las alternativas incluyen OTRAS HORAS del mismo día
+# (no sólo otros días). El mismo caso aplica cuando dos clientas eligen el
+# mismo slot ofrecido: la segunda recibe este re-ofrecimiento, nunca silencio.
 Bot:      "Esa hora ya está apartada 🙈. Te puedo ofrecer:
            1️⃣ Viernes 30 — 3:00pm
            2️⃣ Viernes 30 — 5:00pm

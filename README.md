@@ -10,9 +10,9 @@
 | Métrica                  | Valor                                                                 |
 | ------------------------ | --------------------------------------------------------------------- |
 | **Fase**                 | **En producción** — Salón Demo en vivo (525640501088)                 |
-| **Tests**                | **211 / 211 ✅**                                                      |
+| **Tests**                | **257 / 257 ✅**                                                      |
 | **Typecheck**            | 0 errores                                                             |
-| **Último commit**        | 2026-05-25                                                            |
+| **Último commit**        | 2026-06-04                                                            |
 | **Servicio**             | `salones-wa` (systemd, usuario dedicado, bind `127.0.0.1:8085`)       |
 | **URL pública (nip.io)** | `https://salones.187.77.25.101.nip.io`                                |
 | **Admin panel**          | `https://salones.187.77.25.101.nip.io/admin?token=salones-admin-2026` |
@@ -277,15 +277,15 @@ ROI para la dueña:         5x-10x en valor recuperado vs precio
 
 ## Fases de desarrollo
 
-| Semana  | Focus                                         | Estado                                     |
-| ------- | --------------------------------------------- | ------------------------------------------ |
-| **1-2** | Bot core + anti-cancel + reactivación         | ✅ **COMPLETO** — 88 tests                 |
-| **2b**  | Admin UI — alta/baja salones, servicios       | ✅ **COMPLETO** — 109 tests                |
-| **2c**  | Hardening seguridad + systemd + deploy en VPS | ✅ **COMPLETO** — en producción 2026-05-23 |
-| **3**   | Piloto real: conectar número WA, primer salón | 🔜 **SIGUIENTE** — admin panel listo       |
-| **4**   | Panel web refinado (feedback de uso real)     | ⏳ Pendiente                               |
-| **5**   | Multi-tenant (2+ salones en paralelo)         | ⏳ Pendiente                               |
-| **6+**  | Cold outreach Iztapalapa, primer pago         | ⏳ Pendiente                               |
+| Semana  | Focus                                         | Estado                                                                                        |
+| ------- | --------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| **1-2** | Bot core + anti-cancel + reactivación         | ✅ **COMPLETO** — 88 tests                                                                    |
+| **2b**  | Admin UI — alta/baja salones, servicios       | ✅ **COMPLETO** — 109 tests                                                                   |
+| **2c**  | Hardening seguridad + systemd + deploy en VPS | ✅ **COMPLETO** — en producción 2026-05-23                                                    |
+| **3**   | Piloto real: conectar número WA, primer salón | 🔜 **SIGUIENTE** — admin panel listo                                                          |
+| **4**   | Panel web refinado (feedback de uso real)     | 🟡 En progreso — horario por salón, parser de fechas robusto, anti-doble-reserva (2026-06-04) |
+| **5**   | Multi-tenant (2+ salones en paralelo)         | ⏳ Pendiente                                                                                  |
+| **6+**  | Cold outreach Iztapalapa, primer pago         | ⏳ Pendiente                                                                                  |
 
 ---
 
@@ -335,16 +335,17 @@ Una vez vinculado: `[baileys] [<phone>] connected ✅` en journalctl y archivos 
 
 ### Rutas del admin
 
-| Ruta                                             | Descripción                        |
-| ------------------------------------------------ | ---------------------------------- |
-| `GET /admin`                                     | Lista todos los salones            |
-| `GET /admin/salones/new`                         | Formulario crear salón             |
-| `POST /admin/salones`                            | Crear salón + servicios            |
-| `GET /admin/salones/:id`                         | Editar nombre, teléfono, servicios |
-| `POST /admin/salones/:id/edit`                   | Guardar cambios                    |
-| `POST /admin/salones/:id/toggle`                 | Activar / desactivar               |
-| `POST /admin/salones/:id/services`               | Agregar servicio                   |
-| `POST /admin/salones/:id/services/:svcId/delete` | Eliminar servicio                  |
+| Ruta                                             | Descripción                                                                                          |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `GET /admin`                                     | Lista todos los salones                                                                              |
+| `GET /admin/salones/new`                         | Formulario crear salón                                                                               |
+| `POST /admin/salones`                            | Crear salón + servicios                                                                              |
+| `GET /admin/salones/:id`                         | Editar nombre, teléfono, servicios, horario                                                          |
+| `POST /admin/salones/:id/edit`                   | Guardar cambios                                                                                      |
+| `POST /admin/salones/:id/hours`                  | Guardar horario de atención (un turno por día; sin días marcados = horario por defecto Lun-Sáb 9-19) |
+| `POST /admin/salones/:id/toggle`                 | Activar / desactivar                                                                                 |
+| `POST /admin/salones/:id/services`               | Agregar servicio                                                                                     |
+| `POST /admin/salones/:id/services/:svcId/delete` | Eliminar servicio                                                                                    |
 
 ---
 

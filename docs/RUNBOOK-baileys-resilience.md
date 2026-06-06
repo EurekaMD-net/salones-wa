@@ -362,69 +362,58 @@ UP` log line means manual intervention (likely a re-link, §5) is needed.
 
 ---
 
-### 7.1 — Wiring mc-prometheus (operator, one-time)
+### 7.1 — mc-prometheus wiring — DONE 2026-06-06 (as-built)
 
-> Audience: operator. salones-wa only EXPOSES `/metrics`; mc-prometheus
-> scrapes it and fires the actual alert. This step needs the `ADMIN_TOKEN`
-> (a secret), so it can't be committed — apply it by hand.
+> The scrape job + alert rules are LIVE in `mc-prometheus`
+> (`up{job="salones-wa"}=1`, 3 rules loaded inactive). This records what was
+> actually deployed + the gotchas, for re-creation / a second salon.
 
-**1. Add the scrape job** to `mission-control/monitoring/prometheus.yml`
-(replace `<ADMIN_TOKEN>` with the real value from
-`/root/claude/projects/salones-wa/.env`):
+**Scrape target = the PUBLIC Caddy URL, not `host.docker.internal`.**
+salones-wa binds `127.0.0.1:8085`; the docker bridge host-gateway **cannot**
+reach a host-loopback-only port (verified — `host.docker.internal:8085` and
+`172.17.0.1:8085` both unreachable from the container). The container CAN reach
+the public Caddy URL outbound, so that's the scrape path. In
+`mission-control/monitoring/prometheus.yml`:
 
 ```yaml
 - job_name: "salones-wa"
-  static_configs:
-    - targets: ["host.docker.internal:8085"]
+  scheme: https
   metrics_path: /metrics
   params:
-    token: ["<ADMIN_TOKEN>"]
+    token: ["<ADMIN_TOKEN>"] # from salones-wa .env
+  static_configs:
+    - targets: ["salones.187.77.25.101.nip.io"]
 ```
 
-> ⚠️ **Binding caveat**: salones-wa binds `127.0.0.1:8085`. If
-> mc-prometheus (a container) can't reach `host.docker.internal:8085`,
-> either confirm the docker host-gateway can hit host loopback, or scrape
-> the public Caddy URL instead (`https://salones.187.77.25.101.nip.io`,
-> same `metrics_path` + `params`). Verify with:
-> `docker exec mc-prometheus wget -qO- "http://host.docker.internal:8085/metrics?token=<ADMIN_TOKEN>" | head`
+> 🔐 **Token hygiene**: this puts the token in a TRACKED file. It's protected
+> with `git update-index --skip-worktree monitoring/prometheus.yml` so it can't
+> be staged. If you ever need to edit that file: `git update-index
+--no-skip-worktree …` first, edit, then re-apply skip-worktree (don't commit
+> the token). Alert rules carry no secret and live in `alerts.yml` (group
+> `salones-wa`: `SalonWhatsAppLoggedOut` 1h-crit, `SalonWhatsAppDisconnected`
+> 24h-warn, `SalonesWaScrapeDown` 10m-warn).
 
-**2. Add the alert rules** to `mission-control/monitoring/alerts.yml`
-(no secret — safe to commit to mission-control):
+> ⚠️ **Bind-mount inode gotcha** (cost me a silent no-op): `prometheus.yml` +
+> `alerts.yml` are mounted into the container as INDIVIDUAL files, which pins
+> the inode. An editor that writes via atomic-rename (most do) makes a NEW
+> inode, so the container keeps serving the OLD file and a `SIGHUP`/`/-/reload`
+> reloads stale config. **Use `docker restart mc-prometheus`** (re-resolves the
+> mount), not SIGHUP, after editing these files. Validate first with
+> `docker exec -i mc-prometheus promtool check config /dev/stdin < prometheus.yml`
+> (and `check rules` for alerts.yml) — a bad config silently keeps the old one
+> on reload, and crashes the container on restart.
 
-```yaml
-- name: salones-wa
-  rules:
-    - alert: SalonWhatsAppDisconnected
-      expr: salones_wa_baileys_state{state="connected"} == 0
-      for: 24h
-      labels: { severity: warning }
-      annotations:
-        summary: "Salón {{ $labels.salon_id }} WhatsApp down >24h"
-        description: "Baileys not connected. Re-link via pairing code (§5)."
-    - alert: SalonWhatsAppLoggedOut
-      expr: salones_wa_baileys_state{state="logged_out"} == 1
-      for: 1h
-      labels: { severity: critical }
-      annotations:
-        summary: "Salón {{ $labels.salon_id }} WhatsApp LOGGED OUT"
-        description: "Session invalidated — needs manual re-link (§5)."
-    - alert: SalonesWaScrapeDown
-      expr: up{job="salones-wa"} == 0
-      for: 10m
-      labels: { severity: warning }
-      annotations:
-        summary: "salones-wa /metrics unreachable"
-        description: "Token wrong, service down, or binding issue (see §7 caveat)."
-```
-
-The `for: 24h` clause is the durable signal: it's owned by Prometheus,
-so it keeps counting across salones-wa restarts (a brief scrape gap is
-within tolerance). A salon that reconnects resets the `connected` series
-to 1 and clears the pending alert.
-
-**3. Reload mc-prometheus**: `docker restart mc-prometheus` (or
-`curl -X POST http://127.0.0.1:9090/-/reload` if lifecycle is enabled).
-Confirm the target is `UP` at `http://127.0.0.1:9090/targets`.
+> 🔔 **Notification gap — alerts EVALUATE but don't NOTIFY yet.** There is no
+> Alertmanager and no running Grafana, and `prometheus.yml` has no `alerting:`
+> block — so these rules (like every existing vps-system/mission-control/
+> hindsight rule) fire only into Prometheus' own UI at
+> `http://127.0.0.1:9090/alerts`. To actually page someone, wire ONE of:
+> (a) an Alertmanager container + a receiver (email/Telegram), (b) bring up
+> Grafana (its alerting provisioning already exists under
+> `mission-control/monitoring/grafana/provisioning/alerting/`) + a contact
+> point, or (c) a small mc-side poller of `GET :9090/api/v1/alerts` that pushes
+> firing alerts through Jarvis's existing WhatsApp/Telegram channels. Each needs
+> a channel + credentials — an operator decision, tracked as the open follow-up.
 
 ---
 

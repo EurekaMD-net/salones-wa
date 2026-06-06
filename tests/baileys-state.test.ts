@@ -12,6 +12,9 @@ import {
   evaluateSalonHealth,
   findStaleSalons,
   disconnectAlertHours,
+  reconnectStuckMinutes,
+  selectSalonsToReinit,
+  planWatchdogTick,
   BAILEYS_STATES,
   type SalonConnState,
 } from "../src/bot/baileys-state.js";
@@ -252,5 +255,234 @@ describe("disconnectAlertHours", () => {
   it("truncates fractional hours", () => {
     process.env[KEY] = "12.9";
     expect(disconnectAlertHours()).toBe(12);
+  });
+});
+
+describe("reconnectStuckMinutes", () => {
+  const KEY = "BAILEYS_RECONNECT_STUCK_MINUTES";
+  beforeEach(() => delete process.env[KEY]);
+
+  it("defaults to 5", () => {
+    expect(reconnectStuckMinutes()).toBe(5);
+  });
+
+  it("honors a valid override and clamps below 1 to 1", () => {
+    process.env[KEY] = "2";
+    expect(reconnectStuckMinutes()).toBe(2);
+    process.env[KEY] = "0";
+    expect(reconnectStuckMinutes()).toBe(1);
+  });
+
+  it("falls back to default for non-numeric", () => {
+    process.env[KEY] = "soon";
+    expect(reconnectStuckMinutes()).toBe(5);
+  });
+});
+
+describe("selectSalonsToReinit", () => {
+  const MIN = 60_000;
+  const NOW = 1000 * MIN;
+
+  function salon(id: string) {
+    return { id, phone: `5255${id}` };
+  }
+  function rec(
+    id: string,
+    state: SalonConnState["state"],
+    since: number,
+  ): SalonConnState {
+    return {
+      salonId: id,
+      salonPhone: `5255${id}`,
+      state,
+      since,
+      lastConnectedAt: state === "connected" ? since : null,
+      updatedAt: since,
+    };
+  }
+  const opts = (
+    over?: Partial<{
+      cooldownMs: number;
+      lastHealAt: Map<string, number>;
+      strikes: Map<string, number>;
+      maxStrikes: number;
+    }>,
+  ) => ({
+    nowMs: NOW,
+    stuckMs: 5 * MIN,
+    cooldownMs: 5 * MIN,
+    bootMs: 0,
+    lastHealAt: new Map<string, number>(),
+    strikes: new Map<string, number>(),
+    maxStrikes: 5,
+    ...over,
+  });
+
+  it("heals a salon stuck connecting past the threshold", () => {
+    const recs = new Map([["a", rec("a", "connecting", NOW - 6 * MIN)]]);
+    expect(selectSalonsToReinit([salon("a")], recs, opts())).toEqual(["a"]);
+  });
+
+  it("heals a salon stuck reconnecting past the threshold", () => {
+    const recs = new Map([["a", rec("a", "reconnecting", NOW - 10 * MIN)]]);
+    expect(selectSalonsToReinit([salon("a")], recs, opts())).toEqual(["a"]);
+  });
+
+  it("does NOT heal a connected salon", () => {
+    const recs = new Map([["a", rec("a", "connected", NOW - 99 * MIN)]]);
+    expect(selectSalonsToReinit([salon("a")], recs, opts())).toEqual([]);
+  });
+
+  it("does NOT heal a logged_out salon (manual re-link — no burn loop)", () => {
+    const recs = new Map([["a", rec("a", "logged_out", NOW - 99 * MIN)]]);
+    expect(selectSalonsToReinit([salon("a")], recs, opts())).toEqual([]);
+  });
+
+  it("does NOT heal a recently-transitioned (not-yet-stuck) salon", () => {
+    const recs = new Map([["a", rec("a", "reconnecting", NOW - 1 * MIN)]]);
+    expect(selectSalonsToReinit([salon("a")], recs, opts())).toEqual([]);
+  });
+
+  it("uses strict > threshold (exactly stuckMs is not yet stuck)", () => {
+    const recs = new Map([["a", rec("a", "connecting", NOW - 5 * MIN)]]);
+    expect(selectSalonsToReinit([salon("a")], recs, opts())).toEqual([]);
+  });
+
+  it("heals an active salon with NO record once boot is older than threshold", () => {
+    expect(
+      selectSalonsToReinit([salon("a")], new Map(), opts()), // bootMs=0, now=1000min
+    ).toEqual(["a"]);
+  });
+
+  it("does NOT heal a no-record salon when boot is recent", () => {
+    expect(
+      selectSalonsToReinit([salon("a")], new Map(), {
+        nowMs: NOW,
+        stuckMs: 5 * MIN,
+        cooldownMs: 5 * MIN,
+        bootMs: NOW - 1 * MIN, // booted 1 min ago, < 5 min threshold
+        lastHealAt: new Map<string, number>(),
+        strikes: new Map<string, number>(),
+        maxStrikes: 5,
+      }),
+    ).toEqual([]);
+  });
+
+  it("respects the cooldown — skips a stuck salon healed recently", () => {
+    const recs = new Map([["a", rec("a", "connecting", NOW - 30 * MIN)]]);
+    const lastHealAt = new Map([["a", NOW - 2 * MIN]]); // healed 2 min ago, cooldown 5
+    expect(
+      selectSalonsToReinit([salon("a")], recs, opts({ lastHealAt })),
+    ).toEqual([]);
+  });
+
+  it("heals again once the cooldown has elapsed", () => {
+    const recs = new Map([["a", rec("a", "connecting", NOW - 30 * MIN)]]);
+    const lastHealAt = new Map([["a", NOW - 6 * MIN]]); // cooldown 5 min elapsed
+    expect(
+      selectSalonsToReinit([salon("a")], recs, opts({ lastHealAt })),
+    ).toEqual(["a"]);
+  });
+
+  it("stops healing a salon that has reached maxStrikes (3-strike give-up)", () => {
+    const recs = new Map([["a", rec("a", "connecting", NOW - 30 * MIN)]]);
+    const strikes = new Map([["a", 5]]); // already gave up
+    expect(selectSalonsToReinit([salon("a")], recs, opts({ strikes }))).toEqual(
+      [],
+    );
+  });
+
+  it("still heals a salon with strikes below the cap", () => {
+    const recs = new Map([["a", rec("a", "connecting", NOW - 30 * MIN)]]);
+    const strikes = new Map([["a", 4]]); // one strike left
+    expect(selectSalonsToReinit([salon("a")], recs, opts({ strikes }))).toEqual(
+      ["a"],
+    );
+  });
+
+  it("selects the correct subset across a mixed roster", () => {
+    const recs = new Map([
+      ["a", rec("a", "connected", NOW - 99 * MIN)], // healthy
+      ["b", rec("b", "connecting", NOW - 9 * MIN)], // stuck → heal
+      ["c", rec("c", "logged_out", NOW - 99 * MIN)], // manual → skip
+      ["d", rec("d", "reconnecting", NOW - 2 * MIN)], // not yet stuck
+    ]);
+    const roster = [salon("a"), salon("b"), salon("c"), salon("d")];
+    expect(selectSalonsToReinit(roster, recs, opts())).toEqual(["b"]);
+  });
+});
+
+describe("planWatchdogTick", () => {
+  const MIN = 60_000;
+  const NOW = 1000 * MIN;
+
+  function salon(id: string) {
+    return { id, phone: `5255${id}`, name: `Salón ${id}` };
+  }
+  function rec(
+    id: string,
+    state: SalonConnState["state"],
+    since: number,
+  ): SalonConnState {
+    return {
+      salonId: id,
+      salonPhone: `5255${id}`,
+      state,
+      since,
+      lastConnectedAt: state === "connected" ? since : null,
+      updatedAt: since,
+    };
+  }
+  const base = (over?: Partial<Parameters<typeof planWatchdogTick>[2]>) => ({
+    nowMs: NOW,
+    stuckMs: 5 * MIN,
+    cooldownMs: 5 * MIN,
+    bootMs: 0,
+    maxStrikes: 3,
+    strikes: new Map<string, number>(),
+    lastHealAt: new Map<string, number>(),
+    isRegistered: () => true,
+    ...over,
+  });
+
+  it("increments the strike + records lastHealAt on a heal", () => {
+    const recs = new Map([["a", rec("a", "connecting", NOW - 9 * MIN)]]);
+    const opts = base();
+    const res = planWatchdogTick([salon("a")], recs, opts);
+    expect(res.reinit).toEqual(["a"]);
+    expect(res.gaveUp).toEqual([]);
+    expect(opts.strikes.get("a")).toBe(1);
+    expect(opts.lastHealAt.get("a")).toBe(NOW);
+  });
+
+  it("reports gaveUp when the strike reaches the cap, then stops next tick", () => {
+    const recs = new Map([["a", rec("a", "connecting", NOW - 9 * MIN)]]);
+    const strikes = new Map([["a", 2]]); // one short of cap=3
+    const opts = base({ strikes, cooldownMs: 0 }); // ignore cooldown for clarity
+    const r1 = planWatchdogTick([salon("a")], recs, opts);
+    expect(r1.reinit).toEqual(["a"]);
+    expect(r1.gaveUp).toEqual(["a"]); // 3rd strike = cap
+    expect(opts.strikes.get("a")).toBe(3);
+    // next tick: at the cap → selector excludes it
+    const r2 = planWatchdogTick([salon("a")], recs, opts);
+    expect(r2.reinit).toEqual([]);
+  });
+
+  it("resets strikes + cooldown when a salon is observed connected (clean slate)", () => {
+    const strikes = new Map([["a", 3]]);
+    const lastHealAt = new Map([["a", NOW - 1 * MIN]]);
+    const recs = new Map([["a", rec("a", "connected", NOW)]]);
+    const opts = base({ strikes, lastHealAt });
+    planWatchdogTick([salon("a")], recs, opts);
+    expect(opts.strikes.has("a")).toBe(false);
+    expect(opts.lastHealAt.has("a")).toBe(false);
+  });
+
+  it("never heals an unregistered (onboarding) salon and does not accrue strikes", () => {
+    const recs = new Map([["a", rec("a", "connecting", NOW - 9 * MIN)]]);
+    const opts = base({ isRegistered: () => false });
+    const res = planWatchdogTick([salon("a")], recs, opts);
+    expect(res.reinit).toEqual([]);
+    expect(opts.strikes.has("a")).toBe(false);
   });
 });

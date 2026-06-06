@@ -159,3 +159,160 @@ export function disconnectAlertHours(): number {
   if (!Number.isFinite(raw)) return DEFAULT_ALERT_HOURS;
   return Math.max(1, Math.floor(raw));
 }
+
+// ─── Liveness watchdog (self-heal stuck sockets) ────────────────────────────
+
+const DEFAULT_STUCK_MINUTES = 5;
+
+/**
+ * Minutes a salon may sit non-`connected` before the liveness watchdog
+ * force-reconnects it. Env-overridable via BAILEYS_RECONNECT_STUCK_MINUTES,
+ * floored at 1, default 5. Much shorter than `disconnectAlertHours` (which is
+ * the human-alert horizon) — the watchdog RECOVERS in minutes; the cron/mc
+ * alert only fires if recovery keeps failing for ~a day.
+ */
+export function reconnectStuckMinutes(): number {
+  const raw = Number(process.env["BAILEYS_RECONNECT_STUCK_MINUTES"]);
+  if (!Number.isFinite(raw)) return DEFAULT_STUCK_MINUTES;
+  return Math.max(1, Math.floor(raw));
+}
+
+const DEFAULT_MAX_STRIKES = 5;
+
+/**
+ * Max consecutive watchdog reinits of one salon before giving up until it
+ * recovers (qa-W2, RUNBOOK §3 3-strike rule): a salon that can never reconnect
+ * — e.g. WA blocking the data-center IP — must NOT be hammered forever
+ * (~288 handshakes/day → account ban). Env BAILEYS_RECONNECT_MAX_STRIKES,
+ * floored at 1, default 5. The strike count resets when the salon reaches
+ * `connected`; the disconnect-watch cron / mc alert escalates a salon that
+ * exhausts its strikes to a human.
+ */
+export function reconnectMaxStrikes(): number {
+  const raw = Number(process.env["BAILEYS_RECONNECT_MAX_STRIKES"]);
+  if (!Number.isFinite(raw)) return DEFAULT_MAX_STRIKES;
+  return Math.max(1, Math.floor(raw));
+}
+
+export interface ReinitSelectOpts {
+  nowMs: number;
+  /** Non-connected longer than this (ms) → reconnect candidate. */
+  stuckMs: number;
+  /** Min gap (ms) between self-heals of the same salon (burn-loop guard). */
+  cooldownMs: number;
+  /** Process boot, for an active salon that has NO record yet. */
+  bootMs: number;
+  /** salonId → epoch ms of last watchdog reinit. */
+  lastHealAt: Map<string, number>;
+  /** salonId → consecutive reinit count since last `connected` (3-strike). */
+  strikes: Map<string, number>;
+  /** Stop reiniting a salon once it has this many consecutive strikes. */
+  maxStrikes: number;
+}
+
+/**
+ * Pure: which active salons should the watchdog force-reconnect right now?
+ *
+ * A salon is a candidate when it has been non-`connected` longer than
+ * `stuckMs` AND is not within its post-heal cooldown. Two states are NEVER
+ * healed: `connected` (healthy) and `logged_out` (session invalidated — a
+ * reinit would just spin up a socket that logs out again, the exact burn loop
+ * the RUNBOOK 3-strike rule forbids; that needs a manual re-link). A salon
+ * with no record at all is treated as stuck-since-boot.
+ *
+ * Normal flapping (close → reconnecting → connected in seconds) never trips
+ * this: each transition resets `since`, so `now - since` stays small. Only a
+ * frozen-stuck socket (no events firing, `since` not advancing) crosses the
+ * threshold — which is precisely the zombie case the close-event-driven
+ * reconnect cannot recover on its own.
+ */
+export function selectSalonsToReinit(
+  activeSalons: { id: string; phone: string }[],
+  records: Map<string, SalonConnState>,
+  opts: ReinitSelectOpts,
+): string[] {
+  const out: string[] = [];
+  for (const s of activeSalons) {
+    if ((opts.strikes.get(s.id) ?? 0) >= opts.maxStrikes) continue; // gave up
+    const lastHeal = opts.lastHealAt.get(s.id) ?? 0;
+    if (opts.nowMs - lastHeal < opts.cooldownMs) continue; // cooling down
+    const r = records.get(s.id);
+    if (!r) {
+      if (opts.nowMs - opts.bootMs > opts.stuckMs) out.push(s.id);
+      continue;
+    }
+    if (r.state === "connected") continue;
+    if (r.state === "logged_out") continue; // manual re-link; never burn-loop
+    if (opts.nowMs - r.since > opts.stuckMs) out.push(s.id);
+  }
+  return out;
+}
+
+export interface WatchdogTickOpts {
+  nowMs: number;
+  stuckMs: number;
+  cooldownMs: number;
+  bootMs: number;
+  maxStrikes: number;
+  /** Persistent state, MUTATED in place: salonId → consecutive reinit count. */
+  strikes: Map<string, number>;
+  /** Persistent state, MUTATED in place: salonId → last reinit epoch ms. */
+  lastHealAt: Map<string, number>;
+  /** Injected predicate (qa-W4): has this salon completed pairing? */
+  isRegistered: (salonId: string) => boolean;
+}
+
+export interface WatchdogTickResult {
+  /** salonIds to force-reconnect this tick. */
+  reinit: string[];
+  /** Subset of `reinit` that just hit the strike cap (log "giving up"). */
+  gaveUp: string[];
+}
+
+/**
+ * Decide one watchdog tick. Pure except for the injected `isRegistered`
+ * predicate and the in-place mutation of the persistent `strikes`/`lastHealAt`
+ * maps — the actual reinit + logging side effects stay in index.ts. Extracted
+ * so the 3-strike / reset-on-recovery / onboarding-skip logic is unit-testable
+ * (qa-W-B), mirroring the pure `selectSalonsToReinit`.
+ */
+export function planWatchdogTick(
+  activeSalons: { id: string; phone: string }[],
+  records: Map<string, SalonConnState>,
+  opts: WatchdogTickOpts,
+): WatchdogTickResult {
+  // Recovered salons get a clean slate (qa-W2): a future incident gets a fresh
+  // strike allowance, and the cooldown clears so a later stall heals promptly.
+  for (const r of records.values()) {
+    if (r.state === "connected") {
+      opts.strikes.delete(r.salonId);
+      opts.lastHealAt.delete(r.salonId);
+    }
+  }
+
+  const candidates = selectSalonsToReinit(activeSalons, records, {
+    nowMs: opts.nowMs,
+    stuckMs: opts.stuckMs,
+    cooldownMs: opts.cooldownMs,
+    bootMs: opts.bootMs,
+    lastHealAt: opts.lastHealAt,
+    strikes: opts.strikes,
+    maxStrikes: opts.maxStrikes,
+  });
+
+  const reinit: string[] = [];
+  const gaveUp: string[] = [];
+  for (const id of candidates) {
+    // qa-W4: never reinit an onboarding (unregistered) salon — it would burn
+    // the operator's in-flight pairing code. Such a salon is re-selected and
+    // skipped every tick and never accrues strikes; the registered-gate (not
+    // the strike cap) is what bounds it. That is intended.
+    if (!opts.isRegistered(id)) continue;
+    const n = (opts.strikes.get(id) ?? 0) + 1;
+    opts.strikes.set(id, n);
+    opts.lastHealAt.set(id, opts.nowMs);
+    reinit.push(id);
+    if (n >= opts.maxStrikes) gaveUp.push(id);
+  }
+  return { reinit, gaveUp };
+}

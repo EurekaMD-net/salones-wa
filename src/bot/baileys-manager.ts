@@ -6,7 +6,7 @@
  * In dev/test mode (SALONES_ENV=test), this module is a no-op stub.
  */
 
-import { mkdirSync } from "fs";
+import { mkdirSync, readFileSync } from "fs";
 import { join } from "path";
 import type Database from "better-sqlite3";
 import { getSalonByPhone, upsertContact } from "../db/models.js";
@@ -34,6 +34,14 @@ export interface BaileysManagerOptions {
 }
 
 const instances = new Map<string, BaileysInstance>();
+
+// Per-salon socket generation (qa-C1). reinitBaileysForSalon drops a stuck
+// socket from `instances` but cannot synchronously tear down its WebSocket, so
+// the old socket's event handlers survive. Each socket captures its generation
+// at init; once a newer socket supersedes it, the stale socket's handlers
+// no-op — preventing a zombie's late "close" from deleting the live instance
+// (also closes the pre-existing reconnect race, not just the watchdog path).
+const socketGenerations = new Map<string, number>();
 
 /** Stub sendMessage for test environment */
 function createStubInstance(
@@ -91,6 +99,14 @@ export async function initBaileysForSalon(
   // Observability: this salon is now attempting to connect. Overwritten by the
   // connection.update handler below once the socket opens / closes / logs out.
   recordSalonState(salonId, salonPhone, "connecting");
+
+  // qa-C1: claim a generation. If a later reinit/reconnect supersedes this
+  // socket, the guards below make its handlers inert (a stuck zombie can't
+  // delete the live instance or flip its state on a late "close").
+  const myGeneration = (socketGenerations.get(salonId) ?? 0) + 1;
+  socketGenerations.set(salonId, myGeneration);
+  const isCurrentGeneration = () =>
+    socketGenerations.get(salonId) === myGeneration;
 
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
   const { version } = await fetchLatestBaileysVersion();
@@ -154,6 +170,8 @@ export async function initBaileysForSalon(
   const onPairingCodeCb = options.onPairingCode;
 
   sock.ev.on("connection.update", (update) => {
+    // qa-C1: a superseded (stale) socket must not act on its events.
+    if (!isCurrentGeneration()) return;
     const { connection, lastDisconnect, qr } = update;
 
     if (qr && options.onQR) {
@@ -225,6 +243,8 @@ export async function initBaileysForSalon(
   });
 
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
+    // qa-C1: ignore inbound on a superseded socket (avoid double-processing).
+    if (!isCurrentGeneration()) return;
     if (type !== "notify") return;
 
     for (const msg of messages) {
@@ -292,8 +312,51 @@ export async function initBaileysForSalon(
     },
   };
 
-  instances.set(salonId, instance);
+  // qa-W-A: only publish this socket to the map if it's still the current
+  // generation. A concurrent init/reinit (e.g. the close-handler's 5s
+  // setTimeout racing a watchdog reinit) could otherwise leave the map holding
+  // an older socket (used by sendMessage) while the newer socket owns inbound —
+  // receive-on-one, reply-on-dead. Gating here keeps the map and the active
+  // handler generation in lockstep; a superseded socket becomes fully inert.
+  if (isCurrentGeneration()) instances.set(salonId, instance);
   return instance;
+}
+
+/**
+ * Force a fresh Baileys connection for a salon, dropping any existing
+ * (possibly zombie/stuck) instance WITHOUT logging out — creds stay on disk so
+ * the new socket re-auths silently. Mirrors the close-handler reconnect
+ * (`instances.delete` + init); the liveness watchdog calls this for a salon
+ * stuck non-`connected`, where no "close" event ever fired to trigger the
+ * normal reconnect. Deliberately does NOT call `disconnect()`/`logout()` —
+ * that would invalidate the session and force a manual re-link.
+ */
+export async function reinitBaileysForSalon(
+  options: BaileysManagerOptions,
+  salonId: string,
+  salonPhone: string,
+): Promise<BaileysInstance> {
+  instances.delete(salonId);
+  return initBaileysForSalon(options, salonId, salonPhone);
+}
+
+/**
+ * Whether a salon's session has completed pairing (creds.registered === true).
+ * qa-W4: the liveness watchdog uses this to NEVER force-reconnect a salon that
+ * is mid-onboarding (no registered creds yet) — doing so would invalidate the
+ * operator's in-flight pairing code and burn WA's account-side cool-down.
+ * A never-linked salon legitimately sits in "connecting" while awaiting a scan.
+ */
+export function isSessionRegistered(
+  sessionsDir: string,
+  salonId: string,
+): boolean {
+  try {
+    const raw = readFileSync(join(sessionsDir, salonId, "creds.json"), "utf8");
+    return JSON.parse(raw)?.registered === true;
+  } catch {
+    return false; // no creds / unreadable → treat as not-yet-linked
+  }
 }
 
 export function getInstance(salonId: string): BaileysInstance | undefined {

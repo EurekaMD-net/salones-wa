@@ -338,6 +338,18 @@ Expected per salon:
 - Most recent log line for that salon is "connected ✅" within the
   last few hours (not "reconnecting" or "logged out")
 
+**Self-heal watchdog** (shipped 2026-06-06): a liveness timer (every 60s)
+force-reconnects any active, **registered** salon stuck non-`connected` past
+`BAILEYS_RECONNECT_STUCK_MINUTES` (default 5). This covers the zombie-socket
+gap — a 428 that leaves a socket stuck half-open with no "close" event, so the
+normal close-driven reconnect never retries (the 2026-06-06 incident: dead
+~53h). Safeguards: it never touches `logged_out` salons (manual re-link) or
+salons mid-onboarding (unregistered creds), and it gives up after
+`BAILEYS_RECONNECT_MAX_STRIKES` (default 5) consecutive failed reconnects per
+salon — at which point the disconnect-watch cron / mc alert escalates to a
+human. Kill switch: `BAILEYS_WATCHDOG_ENABLED=false`. A `[watchdog] … GIVING
+UP` log line means manual intervention (likely a re-link, §5) is needed.
+
 **Backlog status** (shipped 2026-06-06):
 
 - ✅ `/health/salons` endpoint exposing per-salon Baileys state
@@ -449,10 +461,13 @@ runbook step):
 
 > Audience: operator. Verified-working snapshot to roll back to.
 
-As of **2026-05-24**:
+As of **2026-06-06**:
 
-- `@whiskeysockets/baileys`: `6.7.23` (`legacy` tag — latest stable
-  pre-7.0)
+- `@whiskeysockets/baileys`: **`7.0.0-rc13`** (pinned `^7.0.0-rc13` in
+  package.json; adopted for the pairing-code protocol). NOTE: `sock.end()`
+  semantics differ from the 6.7.x line — relevant if the reconnect/teardown
+  path is revisited. (This doc previously listed `6.7.23`; that was superseded
+  by the rc13 upgrade.)
 - Pairing-code linking: works on first attempt for accounts NOT
   flagged by WA anti-spam (today's failure was anti-spam, not Baileys)
 - QR linking: fails reliably from data-center IPs (this VPS),
@@ -460,8 +475,8 @@ As of **2026-05-24**:
 
 **Baileys upstream changes to watch**:
 
-- 7.0.0 stable release — currently `rc13`. Once stable, evaluate
-  upgrade.
+- 7.0.0 stable release — we run `rc13`. When stable ships, evaluate
+  pinning off the rc.
 - WhatsApp protocol drift: subscribe to
   https://github.com/WhiskeySockets/Baileys/issues for spike alerts
 - Monthly health check: `npm view @whiskeysockets/baileys time` to

@@ -244,6 +244,10 @@ DB_PATH=./data/salones.db  # Ruta SQLite (default: ./data/salones.db)
 SESSIONS_DIR=./data/sessions  # Sesiones Baileys (default: ./data/sessions)
 ADMIN_TOKEN=...        # Requerido, ≥16 chars. Protege /admin, /metrics, /health/salons
 SALON_DISCONNECT_ALERT_HOURS=24  # Umbral "salón caído" para disconnect-watch + /metrics (default 24, mín 1)
+# Liveness watchdog (auto-reconecta sockets Baileys atorados):
+BAILEYS_WATCHDOG_ENABLED=true        # Kill switch (default on; "false" lo apaga)
+BAILEYS_RECONNECT_STUCK_MINUTES=5    # Min no-conectado antes de forzar reconexión (default 5)
+BAILEYS_RECONNECT_MAX_STRIKES=5      # Reintentos antes de rendirse por salón (default 5, regla 3-strike)
 ```
 
 ---

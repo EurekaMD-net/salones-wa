@@ -24,9 +24,9 @@ Each item is a precondition that, when missed, has caused a real failure.
 
 - [ ] **Salon row exists in DB with `active=1`**
       `bash
-    sqlite3 /root/claude/projects/salones-wa/data/salones.db \
-      "SELECT id, name, phone, active FROM salons WHERE active=1"
-    `
+sqlite3 /root/claude/projects/salones-wa/data/salones.db \
+  "SELECT id, name, phone, active FROM salons WHERE active=1"
+`
       Baileys only inits for active salons at startup. Adding via admin
       DOES set active=1 automatically — verify anyway.
 
@@ -54,22 +54,22 @@ Each item is a precondition that, when missed, has caused a real failure.
 
 - [ ] **The session directory is clean**:
       `bash
-    ls -la /root/claude/projects/salones-wa/data/sessions/<salon-id>/
-    `
+ls -la /root/claude/projects/salones-wa/data/sessions/<salon-id>/
+`
       If there's a stale `creds.json` from a prior failed attempt, WIPE
       it before restart:
       `bash
-    sudo rm -rf /root/claude/projects/salones-wa/data/sessions/<salon-id>/
-    `
+sudo rm -rf /root/claude/projects/salones-wa/data/sessions/<salon-id>/
+`
       Half-state creds cause Baileys to think it has partial auth → WA
       returns 401 → Baileys flags `loggedOut` and won't reconnect.
 
 - [ ] **Service running, /health 200, journalctl tail open**:
       `bash
-    systemctl is-active salones-wa
-    curl -s http://localhost:8085/health | jq
-    journalctl -u salones-wa -f | grep --line-buffered -E 'Pairing code|connected|reconnecting|error'
-    `
+systemctl is-active salones-wa
+curl -s http://localhost:8085/health | jq
+journalctl -u salones-wa -f | grep --line-buffered -E 'Pairing code|connected|reconnecting|error'
+`
 
 ---
 
@@ -304,10 +304,22 @@ responder a tus clientas. ¡Listo!
 3. **Outbound failure rate** — are reactivation/reminder messages
    actually sending?
 
-**Current state**: salones-wa has /health but it only checks DB +
-process. It does NOT check Baileys session state per salon.
+**Current state** (since 2026-06-06): per-salon Baileys state is now
+exposed at `GET /health/salons?token=<ADMIN_TOKEN>` (JSON) and
+`GET /metrics?token=<ADMIN_TOKEN>` (Prometheus). The manual check below
+still works as a no-dependency fallback.
 
-**Manual check** (run weekly):
+**Quick check via the endpoint** (replace `<ADMIN_TOKEN>`):
+
+```bash
+curl -s "http://127.0.0.1:8085/health/salons?token=<ADMIN_TOKEN>" | jq '.salons[] | {name, state, downForSeconds, stale}'
+```
+
+`state` is one of `connected` / `reconnecting` / `logged_out` /
+`connecting` / `unknown`; `stale: true` means down past the alert
+threshold (`SALON_DISCONNECT_ALERT_HOURS`, default 24h).
+
+**Manual check** (fallback, no token needed):
 
 ```bash
 # Per-salon: is there a creds.json AND a recent "connected" log?
@@ -326,16 +338,81 @@ Expected per salon:
 - Most recent log line for that salon is "connected ✅" within the
   last few hours (not "reconnecting" or "logged out")
 
-**Future work** (not shipped):
+**Backlog status** (shipped 2026-06-06):
 
-- /health/salons endpoint exposing per-salon Baileys state
-- Prometheus counter `salones_wa_baileys_state{salon_id, state}` for
-  alerting on `state=logged_out`
-- Weekly cron that emails operator if any salon has been
-  disconnected >24h
+- ✅ `/health/salons` endpoint exposing per-salon Baileys state
+- ✅ Prometheus gauge `salones_wa_baileys_state{salon_id, state}` (+
+  `salones_wa_baileys_connected`, `_down_seconds`,
+  `_last_connected_timestamp_seconds`, `salones_wa_salons_{active,stale}`)
+- ✅ `disconnect-watch` cron (daily 9am MX) — logs a WARN per stale salon.
+  It does NOT email/message anyone: alerting is owned by mc-prometheus
+  (see §7 below), which survives this service restarting.
 
-These are tracked in the salones-wa backlog. Until shipped, manual
-weekly check is the safety net.
+---
+
+### 7.1 — Wiring mc-prometheus (operator, one-time)
+
+> Audience: operator. salones-wa only EXPOSES `/metrics`; mc-prometheus
+> scrapes it and fires the actual alert. This step needs the `ADMIN_TOKEN`
+> (a secret), so it can't be committed — apply it by hand.
+
+**1. Add the scrape job** to `mission-control/monitoring/prometheus.yml`
+(replace `<ADMIN_TOKEN>` with the real value from
+`/root/claude/projects/salones-wa/.env`):
+
+```yaml
+- job_name: "salones-wa"
+  static_configs:
+    - targets: ["host.docker.internal:8085"]
+  metrics_path: /metrics
+  params:
+    token: ["<ADMIN_TOKEN>"]
+```
+
+> ⚠️ **Binding caveat**: salones-wa binds `127.0.0.1:8085`. If
+> mc-prometheus (a container) can't reach `host.docker.internal:8085`,
+> either confirm the docker host-gateway can hit host loopback, or scrape
+> the public Caddy URL instead (`https://salones.187.77.25.101.nip.io`,
+> same `metrics_path` + `params`). Verify with:
+> `docker exec mc-prometheus wget -qO- "http://host.docker.internal:8085/metrics?token=<ADMIN_TOKEN>" | head`
+
+**2. Add the alert rules** to `mission-control/monitoring/alerts.yml`
+(no secret — safe to commit to mission-control):
+
+```yaml
+- name: salones-wa
+  rules:
+    - alert: SalonWhatsAppDisconnected
+      expr: salones_wa_baileys_state{state="connected"} == 0
+      for: 24h
+      labels: { severity: warning }
+      annotations:
+        summary: "Salón {{ $labels.salon_id }} WhatsApp down >24h"
+        description: "Baileys not connected. Re-link via pairing code (§5)."
+    - alert: SalonWhatsAppLoggedOut
+      expr: salones_wa_baileys_state{state="logged_out"} == 1
+      for: 1h
+      labels: { severity: critical }
+      annotations:
+        summary: "Salón {{ $labels.salon_id }} WhatsApp LOGGED OUT"
+        description: "Session invalidated — needs manual re-link (§5)."
+    - alert: SalonesWaScrapeDown
+      expr: up{job="salones-wa"} == 0
+      for: 10m
+      labels: { severity: warning }
+      annotations:
+        summary: "salones-wa /metrics unreachable"
+        description: "Token wrong, service down, or binding issue (see §7 caveat)."
+```
+
+The `for: 24h` clause is the durable signal: it's owned by Prometheus,
+so it keeps counting across salones-wa restarts (a brief scrape gap is
+within tolerance). A salon that reconnects resets the `connected` series
+to 1 and clears the pending alert.
+
+**3. Reload mc-prometheus**: `docker restart mc-prometheus` (or
+`curl -X POST http://127.0.0.1:9090/-/reload` if lifecycle is enabled).
+Confirm the target is `UP` at `http://127.0.0.1:9090/targets`.
 
 ---
 

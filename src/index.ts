@@ -10,6 +10,7 @@ import { getDb } from "./db/database.js";
 import { getAllActiveSalons } from "./db/models.js";
 import { createWebPanel } from "./web/panel.js";
 import { createAdminPanel } from "./web/admin.js";
+import { createObservabilityRoutes } from "./web/observability.js";
 import { registerCrons } from "./crons/index.js";
 import { initBaileysForSalon, getInstance } from "./bot/baileys-manager.js";
 import qrcodeTerminal from "qrcode-terminal";
@@ -54,6 +55,8 @@ async function main() {
   const app = createWebPanel(db);
   const adminApp = createAdminPanel(db);
   app.route("/", adminApp);
+  // Observability surface (/health/salons + /metrics), ADMIN_TOKEN-gated.
+  app.route("/", createObservabilityRoutes(db));
   const bindHost = process.env["BIND_HOST"] ?? "127.0.0.1";
   serve({ fetch: app.fetch, port: PORT, hostname: bindHost }, () => {
     console.log(`[salones-wa] web panel listening on ${bindHost}:${PORT}`);

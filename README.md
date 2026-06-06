@@ -193,14 +193,15 @@ Ver `docs/SCHEMA.md` para el DDL completo.
 
 ## Cron Jobs
 
-| Job                     | Schedule                     | Acción                                             |
-| ----------------------- | ---------------------------- | -------------------------------------------------- |
-| `remind-24h`            | `5 * * * *` (cada hora)      | Busca citas en 24-25h → envía recordatorio         |
-| `remind-2h`             | `*/30 * * * *` (cada 30 min) | Busca citas en 2-3h sin confirmación               |
-| `mark-completed`        | `10 * * * *` (cada hora)     | Marca como `completed` citas pasadas               |
-| `update-dormant`        | `15 0 * * *` (diario 00:15)  | Actualiza flag `dormant` en contacts               |
-| `reactivation-campaign` | `0 10 * * 1` (lunes 10am)    | Detecta dormidas → dispara outbound, máx 20 msgs/h |
-| `state-eviction`        | `*/30 * * * *` (cada 30 min) | Limpia conversation states con TTL expirado        |
+| Job                     | Schedule                     | Acción                                                                                                                   |
+| ----------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `remind-24h`            | `5 * * * *` (cada hora)      | Busca citas en 24-25h → envía recordatorio                                                                               |
+| `remind-2h`             | `*/30 * * * *` (cada 30 min) | Busca citas en 2-3h sin confirmación                                                                                     |
+| `mark-completed`        | `10 * * * *` (cada hora)     | Marca como `completed` citas pasadas                                                                                     |
+| `update-dormant`        | `15 0 * * *` (diario 00:15)  | Actualiza flag `dormant` en contacts                                                                                     |
+| `reactivation-campaign` | `0 10 * * 1` (lunes 10am)    | Detecta dormidas → dispara outbound, máx 20 msgs/h                                                                       |
+| `state-eviction`        | `*/30 * * * *` (cada 30 min) | Limpia conversation states con TTL expirado                                                                              |
+| `disconnect-watch`      | `0 9 * * *` (diario 9am)     | Loggea WARN si un salón lleva su sesión WA caída > umbral (default 24h). NO envía nada — mc-prometheus dispara la alerta |
 
 ---
 
@@ -208,13 +209,30 @@ Ver `docs/SCHEMA.md` para el DDL completo.
 
 Auth por token UUID en URL (`?token=<salon-uuid>`). Sin login, sin OAuth — funciona en 3G.
 
-| Ruta                          | Descripción                                      |
-| ----------------------------- | ------------------------------------------------ |
-| `GET /health`                 | Health check público                             |
-| `GET /panel/dashboard?token=` | Citas de hoy + estadísticas + contactos dormidos |
-| `GET /panel/contacts?token=`  | Lista de contactos con filtros                   |
-| `GET /panel/campaigns?token=` | Historial y métricas de campañas de reactivación |
-| `GET /api/stats?token=`       | JSON con métricas del salón                      |
+| Ruta                          | Descripción                                                            |
+| ----------------------------- | ---------------------------------------------------------------------- |
+| `GET /health`                 | Health check público (liveness, sin detalle)                           |
+| `GET /panel/dashboard?token=` | Citas de hoy + estadísticas + contactos dormidos                       |
+| `GET /panel/contacts?token=`  | Lista de contactos con filtros                                         |
+| `GET /panel/campaigns?token=` | Historial y métricas de campañas de reactivación                       |
+| `GET /api/stats?token=`       | JSON con métricas del salón                                            |
+| `GET /health/salons?token=`   | Estado Baileys por salón (JSON). **Gated: ADMIN_TOKEN**                |
+| `GET /metrics?token=`         | Exposición Prometheus (`salones_wa_baileys_*`). **Gated: ADMIN_TOKEN** |
+
+### Observabilidad (estado de la conexión WhatsApp)
+
+`/health/salons` y `/metrics` exponen el estado Baileys de cada salón activo
+(`connected` / `reconnecting` / `logged_out` / `connecting` / `unknown`), cuánto
+lleva caído, y la última conexión. Ambos endpoints están **protegidos por
+`ADMIN_TOKEN`** (igual que `/admin`) y rate-limited por IP — el panel se sirve
+público vía Caddy, así que sin token devuelven 401.
+
+- **mc-prometheus** raspa `/metrics` y dispara la alerta de "salón caído > 24h"
+  vía su cláusula `for:` (sobrevive a reinicios de este servicio). Ver la guía de
+  wiring en `docs/RUNBOOK-baileys-resilience.md` §7.
+- El cron `disconnect-watch` (diario 9am MX) sólo deja un WARN en journalctl — la
+  alerta real la dispara mc, no este servicio.
+- Umbral configurable con `SALON_DISCONNECT_ALERT_HOURS` (default 24).
 
 ---
 
@@ -224,6 +242,8 @@ Auth por token UUID en URL (`?token=<salon-uuid>`). Sin login, sin OAuth — fun
 PORT=8085              # Puerto del panel web (default: 8085)
 DB_PATH=./data/salones.db  # Ruta SQLite (default: ./data/salones.db)
 SESSIONS_DIR=./data/sessions  # Sesiones Baileys (default: ./data/sessions)
+ADMIN_TOKEN=...        # Requerido, ≥16 chars. Protege /admin, /metrics, /health/salons
+SALON_DISCONNECT_ALERT_HOURS=24  # Umbral "salón caído" para disconnect-watch + /metrics (default 24, mín 1)
 ```
 
 ---

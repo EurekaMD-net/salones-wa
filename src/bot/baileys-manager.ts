@@ -11,6 +11,7 @@ import { join } from "path";
 import type Database from "better-sqlite3";
 import { getSalonByPhone, upsertContact } from "../db/models.js";
 import { handleInboundMessage } from "./message-handler.js";
+import { recordSalonState } from "./baileys-state.js";
 
 export interface BaileysInstance {
   salonId: string;
@@ -69,6 +70,9 @@ export async function initBaileysForSalon(
   if (isTest) {
     const instance = createStubInstance(salonId, salonPhone);
     instances.set(salonId, instance);
+    // Stubs are functionally "connected" (they can send) — surface that in
+    // the observability registry so a dev/test run shows green.
+    recordSalonState(salonId, salonPhone, "connected");
     return instance;
   }
 
@@ -83,6 +87,10 @@ export async function initBaileysForSalon(
 
   const sessionDir = join(options.sessionsDir, salonId);
   mkdirSync(sessionDir, { recursive: true });
+
+  // Observability: this salon is now attempting to connect. Overwritten by the
+  // connection.update handler below once the socket opens / closes / logs out.
+  recordSalonState(salonId, salonPhone, "connecting");
 
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
   const { version } = await fetchLatestBaileysVersion();
@@ -185,6 +193,7 @@ export async function initBaileysForSalon(
       const reason = lastDisconnect?.error?.message ?? "unknown";
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
       if (shouldReconnect) {
+        recordSalonState(salonId, salonPhone, "reconnecting");
         console.log(
           `[baileys] [${salonPhone}] reconnecting (code=${statusCode ?? "?"}, reason=${reason})...`,
         );
@@ -201,6 +210,7 @@ export async function initBaileysForSalon(
           5000,
         );
       } else {
+        recordSalonState(salonId, salonPhone, "logged_out");
         console.log(
           `[baileys] [${salonPhone}] logged out — manual re-link required`,
         );
@@ -209,6 +219,7 @@ export async function initBaileysForSalon(
     }
 
     if (connection === "open") {
+      recordSalonState(salonId, salonPhone, "connected");
       console.log(`[baileys] [${salonPhone}] connected ✅`);
     }
   });

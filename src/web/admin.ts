@@ -11,8 +11,8 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { timingSafeEqual } from "crypto";
 import type Database from "better-sqlite3";
+import { getAdminToken, safeTokenCompare, createRateLimiter } from "./auth.js";
 import {
   getAllSalons,
   getSalonById,
@@ -53,49 +53,8 @@ function escapeHtml(str: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function getAdminToken(): string {
-  const token = process.env["ADMIN_TOKEN"];
-  if (!token)
-    throw new Error("[salones-wa] ADMIN_TOKEN env var is required but not set");
-  if (token.length < 16)
-    throw new Error("[salones-wa] ADMIN_TOKEN must be at least 16 characters");
-  return token;
-}
-
-/** Constant-time token comparison to prevent timing attacks */
-function safeTokenCompare(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    // Still do a dummy compare to avoid length-based timing leak
-    timingSafeEqual(Buffer.from(a), Buffer.alloc(a.length));
-    return false;
-  }
-  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
-}
-
 // Per-IP brute-force protection (in-memory, resets on restart)
-const authAttempts = new Map<string, { count: number; resetAt: number }>();
-const MAX_AUTH_ATTEMPTS = 5;
-const AUTH_WINDOW_MS = 60_000;
-
-function checkRateLimit(ip: string): boolean {
-  const now = Date.now();
-  const record = authAttempts.get(ip);
-  if (!record || record.resetAt < now) {
-    authAttempts.set(ip, { count: 0, resetAt: now + AUTH_WINDOW_MS });
-    return true; // OK
-  }
-  return record.count < MAX_AUTH_ATTEMPTS;
-}
-
-function recordFailedAttempt(ip: string): void {
-  const now = Date.now();
-  const record = authAttempts.get(ip);
-  if (!record || record.resetAt < now) {
-    authAttempts.set(ip, { count: 1, resetAt: now + AUTH_WINDOW_MS });
-  } else {
-    record.count++;
-  }
-}
+const rateLimiter = createRateLimiter();
 
 /** Validate phone: digits only, 10-15 chars (international format) */
 function isValidPhone(phone: string): boolean {
@@ -214,7 +173,7 @@ export function createAdminPanel(db: Database.Database): Hono {
     const ip =
       c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
 
-    if (!checkRateLimit(ip)) {
+    if (!rateLimiter.check(ip)) {
       return c.text("Demasiados intentos. Espera 1 minuto.", 429);
     }
 
@@ -230,7 +189,7 @@ export function createAdminPanel(db: Database.Database): Hono {
     }
 
     if (!safeTokenCompare(token, adminToken)) {
-      recordFailedAttempt(ip);
+      rateLimiter.recordFailure(ip);
       return c.text(
         "Token de administrador requerido o inválido\n\nUsa: /admin?token=TU_ADMIN_TOKEN",
         401,

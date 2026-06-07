@@ -6,14 +6,17 @@
 > tracked, ban-safe, reply-aware campaign run from **one fresh WhatsApp Business
 > number** — never the operator's personal line or the product/bot (`5640501088`) line.
 >
-> **Build status (2026-06-07):** **P0 done** — isolated service at repo
-> `EurekaMD-net/gilda-outreach`. Schema + prospect models + idempotent
+> **Build status (2026-06-07):** **P0–P2 done** — isolated service at repo
+> `EurekaMD-net/gilda-outreach`. P0: schema + prospect models + idempotent
 > Google-Sheet import (dedupe on `wa_jid`) + a no-outreach blocklist enforced in
 > code at import (bot `5640501088` blocked by default; the personal line is
 > supplied via `OUTREACH_BLOCKLIST` in the gitignored `.env`, never in source).
-> Built and tested (40 tests, all green). The live 277-row load is an
-> operator-run command (creds from mc/.env; see the repo README). **P1+ blocked
-> on SIM hardware.**
+> P2: the **receiver** — `handleInboundMessage`, a pure socket-free handler for
+> inbound replies (opt-out → permanent suppress; interested → status + one
+> operator alert, no auto-pitch; any reply drops from queue; group/broadcast JIDs
+> ignored). Built and tested (85 tests, all green). The live 277-row load is an
+> operator-run command (creds from mc/.env; see the repo README). **P1 (Baileys
+> session that feeds the receiver + the sender) blocked on SIM hardware.**
 
 ---
 

@@ -19,13 +19,27 @@ number looks like it's being flagged.
 
 - No bot auto-pitch to cold leads — a reply means a **human** (Fede) takes over.
   The product bot is for _booked clients_, not for closing cold prospects.
-- No multi-number rotation yet (schema is ready for it; we run one number).
+- Two SIMs in hand (brand + outreach — see §2); no >2-number rotation yet
+  (schema's `number_id` is ready for it).
 - No official WhatsApp Business **API** yet — a fresh SIM on the **Business app**
   is the right pilot tool. Migrate to the API only if the pilot proves conversion.
 
 ---
 
 ## 2. Architecture decision — separate service
+
+> **Update 2026-06-07 — operator has TWO SIMs.** Assignment:
+>
+> - **SIM #1 → Brand** (`number_id='brand'`): the stable, protected, long-term
+>   face. Goes on the landing CTA (off your personal `5530331051`), handles
+>   inbound from the landing + lead hand-offs, kept low-volume and clean.
+> - **SIM #2 → Outreach** (`number_id='outreach'`): the cold-send, ban-prone,
+>   semi-disposable number. Does the cold DMs; if it cools/bans you lose only it.
+>
+> Continuity note: a cold reply lands on the **outreach** number — for the pilot
+> Fede takes over there; if that number looks at-risk, migrate hot leads to the
+> brand number. The schema's `number_id` already carries this split, so the
+> sender targets `outreach` while the brand session just listens + handles the CTA.
 
 Build a new service **`gilda-outreach`**, isolated from `salones-wa`:
 

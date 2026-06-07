@@ -7,15 +7,15 @@
 
 ## Estado del proyecto
 
-| Métrica                  | Valor                                                            |
-| ------------------------ | ---------------------------------------------------------------- |
-| **Fase**                 | **En producción** — Salón Demo en vivo (525640501088)            |
-| **Tests**                | **257 / 257 ✅**                                                 |
-| **Typecheck**            | 0 errores                                                        |
-| **Último commit**        | 2026-06-04                                                       |
-| **Servicio**             | `salones-wa` (systemd, usuario dedicado, bind `127.0.0.1:8085`)  |
-| **URL pública (nip.io)** | `https://salones.187.77.25.101.nip.io`                           |
-| **Admin panel**          | `https://salones.187.77.25.101.nip.io/admin?token=<ADMIN_TOKEN>` |
+| Métrica           | Valor                                                            |
+| ----------------- | ---------------------------------------------------------------- |
+| **Fase**          | **En producción** — Salón Demo en vivo (525640501088)            |
+| **Tests**         | **257 / 257 ✅**                                                 |
+| **Typecheck**     | 0 errores                                                        |
+| **Último commit** | 2026-06-04                                                       |
+| **Servicio**      | `salones-wa` (systemd, usuario dedicado, bind `127.0.0.1:8085`)  |
+| **URL pública**   | `https://gilda.mx` (landing) · `https://app.gilda.mx` (servicio) |
+| **Admin panel**   | `https://app.gilda.mx/admin?token=<ADMIN_TOKEN>`                 |
 
 ---
 
@@ -411,13 +411,13 @@ El servicio está instalado como systemd unit y corriendo en el VPS:
 
 ```bash
 systemctl status salones-wa   # → active (running)
-curl https://salones.187.77.25.101.nip.io/health  # → {"ok":true}
+curl https://app.gilda.mx/health  # → {"ok":true}
 ```
 
-| Recurso      | URL                                                              |
-| ------------ | ---------------------------------------------------------------- |
-| Health check | `https://salones.187.77.25.101.nip.io/health`                    |
-| Admin panel  | `https://salones.187.77.25.101.nip.io/admin?token=<ADMIN_TOKEN>` |
+| Recurso      | URL                                              |
+| ------------ | ------------------------------------------------ |
+| Health check | `https://app.gilda.mx/health`                    |
+| Admin panel  | `https://app.gilda.mx/admin?token=<ADMIN_TOKEN>` |
 
 **Próximo paso:** crear primer salón en el admin panel → reiniciar servicio → vincular número WA con pairing code (ver sección "Vincular número WA").
 

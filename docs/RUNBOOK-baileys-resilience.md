@@ -382,7 +382,7 @@ the public Caddy URL outbound, so that's the scrape path. In
   params:
     token: ["<ADMIN_TOKEN>"] # from salones-wa .env
   static_configs:
-    - targets: ["salones.187.77.25.101.nip.io"]
+    - targets: ["app.gilda.mx"] # was salones.187.77.25.101.nip.io (retired 2026-06-07)
 ```
 
 > 🔐 **Token hygiene**: this puts the token in a TRACKED file. It's protected

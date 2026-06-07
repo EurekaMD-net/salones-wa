@@ -3,10 +3,11 @@
  * Covers: auth guard, salon CRUD, service management, toggle
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { initDb } from "../db/database.js";
 import { createAdminPanel } from "./admin.js";
 import {
+  createSalon,
   getSalonById,
   getAllSalons,
   getServices,
@@ -935,5 +936,114 @@ describe("Admin Panel — WhatsApp linking advisory (#5)", () => {
     expect(text).toContain("Dispositivos vinculados");
     expect(text).toContain("24 h"); // cool-down advisory
     expect(text).toContain(salonPhone); // names the salon's own line
+  });
+});
+
+describe("Admin Panel — Delete salon", () => {
+  let db: Database.Database;
+  let onSalonDeleted: ReturnType<typeof vi.fn>;
+  let app: ReturnType<typeof createAdminPanel>;
+
+  beforeEach(() => {
+    db = initDb(":memory:");
+    process.env["ADMIN_TOKEN"] = ADMIN_TOKEN;
+    onSalonDeleted = vi.fn(async (_id: string) => {});
+    app = createAdminPanel(db, { onSalonDeleted });
+  });
+
+  function makeSalon() {
+    return createSalon(db, { name: "Salón Borrar", phone: "5255000001" });
+  }
+
+  it("GET confirm page shows the warning, the name and a typed-name field", async () => {
+    const salon = makeSalon();
+    const res = await get(
+      app,
+      `/admin/salones/${salon.id}/delete?token=${ADMIN_TOKEN}`,
+    );
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("Eliminar");
+    expect(html).toContain("Salón Borrar");
+    expect(html).toContain('name="confirm_name"');
+  });
+
+  it("GET confirm page returns 404 for an unknown salon", async () => {
+    const res = await get(
+      app,
+      `/admin/salones/nope/delete?token=${ADMIN_TOKEN}`,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("POST with a non-matching name does NOT delete and does NOT tear down", async () => {
+    const salon = makeSalon();
+    const res = await post(
+      app,
+      `/admin/salones/${salon.id}/delete?token=${ADMIN_TOKEN}`,
+      { confirm_name: "Nombre Equivocado" },
+    );
+    expect(res.status).toBe(400);
+    expect(getSalonById(db, salon.id)).not.toBeNull(); // still present
+    expect(onSalonDeleted).not.toHaveBeenCalled();
+  });
+
+  it("POST with the exact name deletes the salon and tears down Baileys", async () => {
+    const salon = makeSalon();
+    const res = await post(
+      app,
+      `/admin/salones/${salon.id}/delete?token=${ADMIN_TOKEN}`,
+      { confirm_name: "Salón Borrar" },
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toContain("deleted=1");
+    expect(getSalonById(db, salon.id)).toBeNull();
+    expect(onSalonDeleted).toHaveBeenCalledWith(salon.id);
+  });
+
+  it("still deletes the row even if teardown rejects (best-effort)", async () => {
+    const salon = makeSalon();
+    onSalonDeleted.mockRejectedValueOnce(new Error("logout hung"));
+    const res = await post(
+      app,
+      `/admin/salones/${salon.id}/delete?token=${ADMIN_TOKEN}`,
+      { confirm_name: "Salón Borrar" },
+    );
+    expect(res.status).toBe(302);
+    expect(getSalonById(db, salon.id)).toBeNull();
+  });
+
+  it("escapes a malicious salon name in the page title (no XSS break-out)", async () => {
+    const salon = createSalon(db, {
+      name: "</title><script>alert(1)</script>",
+      phone: "5255000002",
+    });
+    const res = await get(
+      app,
+      `/admin/salones/${salon.id}/delete?token=${ADMIN_TOKEN}`,
+    );
+    const html = await res.text();
+    // The raw break-out sequence must NOT appear; it must be entity-encoded.
+    expect(html).not.toContain("</title><script>");
+    expect(html).toContain("&lt;/title&gt;");
+  });
+
+  it("rejects a cross-site POST (no Origin/Referer) with 403 and keeps the salon", async () => {
+    const salon = makeSalon();
+    const req = new Request(
+      `http://localhost/admin/salones/${salon.id}/delete?token=${ADMIN_TOKEN}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Host: "localhost", // no Origin/Referer → CSRF guard must reject
+        },
+        body: new URLSearchParams({ confirm_name: "Salón Borrar" }).toString(),
+      },
+    );
+    const res = await app.fetch(req);
+    expect(res.status).toBe(403);
+    expect(getSalonById(db, salon.id)).not.toBeNull();
+    expect(onSalonDeleted).not.toHaveBeenCalled();
   });
 });

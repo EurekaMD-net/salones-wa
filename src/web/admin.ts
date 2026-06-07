@@ -23,9 +23,12 @@ import {
   createService,
   updateService,
   deleteService,
+  deleteSalon,
+  getSalonDataCounts,
   getSlotsForSalon,
   setSlotsForSalon,
   isValidWorkingHour,
+  type Salon,
   type Slot,
   type WorkingHourInput,
 } from "../db/models.js";
@@ -142,7 +145,7 @@ function layout(title: string, body: string, adminToken: string): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title} — Admin Salones</title>
+  <title>${escapeHtml(title)} — Admin Salones</title>
   <style>${css}</style>
 </head>
 <body>
@@ -160,9 +163,66 @@ function layout(title: string, body: string, adminToken: string): string {
 </html>`;
 }
 
+/** Body for the irreversible-delete confirmation screen. Shared by the GET
+ * confirm route and the POST handler's typed-name-mismatch re-render, so both
+ * present an identical screen (DRY — one source of the warning copy + counts).
+ * `error` renders a red banner when the typed name didn't match. */
+function deleteConfirmBody(
+  salon: Salon,
+  counts: {
+    services: number;
+    slots: number;
+    contacts: number;
+    appointments: number;
+    campaigns: number;
+  },
+  adminToken: string,
+  error?: string,
+): string {
+  return `
+    <div style="margin-bottom:16px">
+      <a href="/admin/salones/${salon.id}?token=${adminToken}" class="btn btn-secondary btn-sm">← Cancelar</a>
+    </div>
+    <div class="card">
+      <div class="card-header"><h2 style="color:#c0392b">⚠️ Eliminar “${escapeHtml(salon.name)}”</h2></div>
+      <div class="card-body">
+        ${error ? `<div class="alert" style="background:#fdecea;color:#c0392b;border:1px solid #f5c6cb">${escapeHtml(error)}</div>` : ""}
+        <p style="margin-bottom:12px">Esta acción <strong>elimina permanentemente</strong> el salón y todos sus datos. <strong>No se puede deshacer.</strong> Para solo pausar el bot, usa <em>Desactivar</em>.</p>
+        <p style="font-size:0.85rem;color:#444;margin-bottom:6px">Se eliminarán:</p>
+        <ul style="margin:0 0 16px 20px;font-size:0.9rem;color:#444;line-height:1.7">
+          <li><strong>${counts.appointments}</strong> cita(s)</li>
+          <li><strong>${counts.contacts}</strong> contacto(s)</li>
+          <li><strong>${counts.services}</strong> servicio(s)</li>
+          <li><strong>${counts.campaigns}</strong> campaña(s)</li>
+          <li><strong>${counts.slots}</strong> horario(s) personalizado(s)</li>
+        </ul>
+        <p style="font-size:0.85rem;color:#666;margin-bottom:16px">Su WhatsApp (<strong style="font-family:monospace">${escapeHtml(salon.phone)}</strong>) se desconectará y la sesión se borrará del servidor.</p>
+        <form method="POST" action="/admin/salones/${salon.id}/delete?token=${adminToken}">
+          <div class="form-group">
+            <label>Para confirmar, escribe el nombre del salón: <strong>${escapeHtml(salon.name)}</strong></label>
+            <input class="form-control" name="confirm_name" autocomplete="off" placeholder="${escapeHtml(salon.name)}" required />
+          </div>
+          <button type="submit" class="btn btn-danger">Sí, eliminar permanentemente</button>
+          <a href="/admin/salones/${salon.id}?token=${adminToken}" class="btn btn-secondary" style="margin-left:8px">Cancelar</a>
+        </form>
+      </div>
+    </div>`;
+}
+
 // ─── Router factory ──────────────────────────────────────────────────────────
 
-export function createAdminPanel(db: Database.Database): Hono {
+/** Options for the admin panel. onSalonDeleted lets the host wire side-effects
+ * (e.g. tearing down a deleted salon's live Baileys socket + session) without
+ * coupling this HTTP layer to the bot internals. Optional so tests and any
+ * web-only host can omit it. */
+export interface AdminPanelOptions {
+  onSalonDeleted?: (salonId: string) => Promise<void> | void;
+}
+
+export function createAdminPanel(
+  db: Database.Database,
+  opts: AdminPanelOptions = {},
+): Hono {
   const app = new Hono();
 
   // W7: Body size limit on all admin routes (DoS protection)
@@ -229,7 +289,13 @@ export function createAdminPanel(db: Database.Database): Hono {
       })
       .join("");
 
+    const deletedBanner =
+      c.req.query("deleted") === "1"
+        ? '<div class="alert alert-success">Salón eliminado permanentemente.</div>'
+        : "";
+
     const body = `
+      ${deletedBanner}
       <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding:0">
         <h2 style="font-size:1.1rem">Salones registrados (${salons.length})</h2>
         <a href="/admin/salones/new?token=${adminToken}" class="btn btn-primary">+ Nuevo salón</a>
@@ -586,8 +652,21 @@ export function createAdminPanel(db: Database.Database): Hono {
             </button>
           </form>
           <p style="margin-top:8px;font-size:0.8rem;color:#999">
-            ${salon.active ? "Desactivar detiene el bot WA para este salón." : "Activar permite al bot responder mensajes de este salón."}
+            ${salon.active ? "Desactivar detiene el bot WA para este salón (reversible)." : "Activar permite al bot responder mensajes de este salón."}
           </p>
+
+          <hr>
+
+          <h3 style="color:#c0392b">Eliminar salón</h3>
+          <p style="margin:4px 0 12px;font-size:0.85rem;color:#666">
+            Borra el salón y <strong>todos</strong> sus datos (citas, contactos,
+            servicios, campañas) de forma permanente, y desconecta su WhatsApp.
+            <strong>No se puede deshacer.</strong> Si solo quieres pausar el bot,
+            usa <em>Desactivar</em>.
+          </p>
+          <a href="/admin/salones/${salon.id}/delete?token=${adminToken}" class="btn btn-danger">
+            🗑 Eliminar permanentemente…
+          </a>
         </div>
       </div>`;
 
@@ -727,6 +806,71 @@ export function createAdminPanel(db: Database.Database): Hono {
     // W10: enforce salon scoping — only delete services belonging to this salon
     deleteService(db, c.req.param("svcId"), salon.id);
     return c.redirect(`/admin/salones/${salon.id}?token=${adminToken}`);
+  });
+
+  // ─── GET /admin/salones/:id/delete — pantalla de confirmación ────────
+  app.get("/admin/salones/:id/delete", (c) => {
+    const adminToken = c.req.query("token")!;
+    const salon = getSalonById(db, c.req.param("id"));
+    if (!salon) return c.text("Salón no encontrado", 404);
+
+    const counts = getSalonDataCounts(db, salon.id);
+    return c.html(
+      layout(
+        `Eliminar ${salon.name}`,
+        deleteConfirmBody(salon, counts, adminToken),
+        adminToken,
+      ),
+    );
+  });
+
+  // ─── POST /admin/salones/:id/delete — eliminar permanentemente ───────
+  app.post("/admin/salones/:id/delete", async (c) => {
+    if (!checkCsrf(c)) return c.text("Solicitud inválida", 403);
+    const adminToken = c.req.query("token")!;
+    const salon = getSalonById(db, c.req.param("id"));
+    if (!salon) return c.text("Salón no encontrado", 404);
+
+    const form = await c.req.formData();
+    const confirmName = (
+      (form.get("confirm_name") as string | null) ?? ""
+    ).trim();
+
+    // Typed-name poka-yoke: require the exact salon name before an irreversible
+    // delete. Blocks an accidental wipe from a misclick or a stale/confused tab.
+    // On mismatch, re-render the SAME confirm screen with an error (no delete).
+    if (confirmName !== salon.name) {
+      const counts = getSalonDataCounts(db, salon.id);
+      return c.html(
+        layout(
+          `Eliminar ${salon.name}`,
+          deleteConfirmBody(
+            salon,
+            counts,
+            adminToken,
+            "El nombre no coincide. Escríbelo exactamente como aparece para confirmar.",
+          ),
+          adminToken,
+        ),
+        400,
+      );
+    }
+
+    // Tear down the live Baileys socket + on-disk session FIRST so the bot stops
+    // answering and the WA device is released — but best-effort: a logout that
+    // fails must NOT block removing the row, so swallow and proceed. The DB
+    // delete cascades to every child table (services/slots/contacts/
+    // appointments/campaigns) via ON DELETE CASCADE.
+    try {
+      await opts.onSalonDeleted?.(salon.id);
+    } catch (err) {
+      console.error(
+        `[admin] onSalonDeleted failed for salon ${salon.id} (continuing with DB delete):`,
+        err,
+      );
+    }
+    deleteSalon(db, salon.id);
+    return c.redirect(`/admin?token=${adminToken}&deleted=1`);
   });
 
   return app;

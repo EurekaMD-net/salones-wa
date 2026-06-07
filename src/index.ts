@@ -15,6 +15,7 @@ import { registerCrons } from "./crons/index.js";
 import {
   initBaileysForSalon,
   reinitBaileysForSalon,
+  removeBaileysForSalon,
   isSessionRegistered,
   getInstance,
 } from "./bot/baileys-manager.js";
@@ -61,11 +62,37 @@ async function main() {
   const dbShm = dbFile + "-shm";
   if (fs.existsSync(dbShm)) fs.chmodSync(dbShm, 0o600);
 
+  // Baileys connection options — defined BEFORE the admin panel so the admin
+  // "delete salon" action can reuse them to tear down a deleted salon's live
+  // socket + session. Shared with the boot loop and the liveness watchdog so
+  // all three re-init with the SAME callbacks (QR / pairing render).
+  const baileysOptions = {
+    sessionsDir: SESSIONS_DIR,
+    db,
+    onQR: (salonId: string, qr: string) => {
+      console.log(`[salones-wa] QR for salon ${salonId} — scan with WhatsApp:`);
+      // W8: Actually render the QR code in the terminal
+      qrcodeTerminal.generate(qr, { small: true });
+    },
+    onPairingCode: (salonId: string, code: string) => {
+      // Pairing-code link is preferred over QR for VPS / data-center IPs
+      // (WA's QR flow tends to reject these). Operator enters this 8-digit
+      // code in WhatsApp → Linked Devices → "Vincular con número de teléfono".
+      console.log(`[salones-wa] Pairing code for salon ${salonId}: ${code}`);
+    },
+  };
+
   // ─── Web panel + Admin (Hono) ────────────────────────────────────────
   // Binds to 127.0.0.1 by default. Front with Caddy for public access.
   // To override (NOT recommended for production): set BIND_HOST=0.0.0.0 in .env
   const app = createWebPanel(db);
-  const adminApp = createAdminPanel(db);
+  // onSalonDeleted: when an admin permanently deletes a salon, tear down its
+  // live Baileys socket (logout + drop instance + remove session dir) so no
+  // zombie keeps running until the next restart.
+  const adminApp = createAdminPanel(db, {
+    onSalonDeleted: (salonId: string) =>
+      removeBaileysForSalon(baileysOptions, salonId),
+  });
   app.route("/", adminApp);
   // Observability surface (/health/salons + /metrics), ADMIN_TOKEN-gated.
   app.route("/", createObservabilityRoutes(db));
@@ -111,24 +138,6 @@ async function main() {
       "[salones-wa] no active salons configured. Add one via onboarding script.",
     );
   }
-
-  // Shared so both the initial boot loop and the liveness watchdog re-init
-  // with the SAME callbacks (QR / pairing render).
-  const baileysOptions = {
-    sessionsDir: SESSIONS_DIR,
-    db,
-    onQR: (salonId: string, qr: string) => {
-      console.log(`[salones-wa] QR for salon ${salonId} — scan with WhatsApp:`);
-      // W8: Actually render the QR code in the terminal
-      qrcodeTerminal.generate(qr, { small: true });
-    },
-    onPairingCode: (salonId: string, code: string) => {
-      // Pairing-code link is preferred over QR for VPS / data-center IPs
-      // (WA's QR flow tends to reject these). Operator enters this 8-digit
-      // code in WhatsApp → Linked Devices → "Vincular con número de teléfono".
-      console.log(`[salones-wa] Pairing code for salon ${salonId}: ${code}`);
-    },
-  };
 
   for (const salon of salons) {
     await initBaileysForSalon(baileysOptions, salon.id, salon.phone);

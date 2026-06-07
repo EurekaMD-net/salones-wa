@@ -20,6 +20,10 @@ import {
   getCampaignStats,
   getSalonByToken,
   getSalonByPhone,
+  getSalonById,
+  deleteSalon,
+  getSalonDataCounts,
+  setSlotsForSalon,
 } from "../src/db/models.js";
 import type Database from "better-sqlite3";
 
@@ -61,6 +65,136 @@ function makeAppointment(
 }
 
 // ─── Salons ───────────────────────────────────────────────────────────────────
+
+describe("deleteSalon", () => {
+  function countRows(salon_id: string) {
+    const n = (sql: string) =>
+      (db.prepare(sql).get(salon_id) as { n: number }).n;
+    return {
+      salons: n("SELECT COUNT(*) AS n FROM salons WHERE id = ?"),
+      services: n("SELECT COUNT(*) AS n FROM services WHERE salon_id = ?"),
+      slots: n("SELECT COUNT(*) AS n FROM slots WHERE salon_id = ?"),
+      contacts: n("SELECT COUNT(*) AS n FROM contacts WHERE salon_id = ?"),
+      appointments: n(
+        "SELECT COUNT(*) AS n FROM appointments WHERE salon_id = ?",
+      ),
+      campaigns: n("SELECT COUNT(*) AS n FROM campaigns WHERE salon_id = ?"),
+    };
+  }
+
+  function seedSalonWithData(phone: string) {
+    const salon = makeSalon(phone);
+    addService(db, {
+      salon_id: salon.id,
+      name: "Corte",
+      duration_min: 30,
+      price: 200,
+    });
+    setSlotsForSalon(db, salon.id, [
+      { day_of_week: 1, start_time: "09:00", end_time: "18:00" },
+    ]);
+    const contact = makeContact(salon.id, phone + "9");
+    makeAppointment(salon.id, contact.id);
+    createCampaign(db, { salon_id: salon.id, contact_id: contact.id });
+    return salon;
+  }
+
+  it("removes the salon row and returns 1", () => {
+    const salon = makeSalon();
+    expect(deleteSalon(db, salon.id)).toBe(1);
+    expect(getSalonById(db, salon.id)).toBeNull();
+  });
+
+  it("returns 0 for an unknown id (no-op)", () => {
+    expect(deleteSalon(db, "does-not-exist")).toBe(0);
+  });
+
+  it("cascades to EVERY child table (services/slots/contacts/appointments/campaigns)", () => {
+    const salon = seedSalonWithData("+5255000111");
+    // Pre-condition: the salon really has data in each table.
+    const before = countRows(salon.id);
+    expect(before).toEqual({
+      salons: 1,
+      services: 1,
+      slots: 1,
+      contacts: 1,
+      appointments: 1,
+      campaigns: 1,
+    });
+
+    deleteSalon(db, salon.id);
+
+    // Cascade must leave zero orphans in every child table.
+    expect(countRows(salon.id)).toEqual({
+      salons: 0,
+      services: 0,
+      slots: 0,
+      contacts: 0,
+      appointments: 0,
+      campaigns: 0,
+    });
+  });
+
+  it("only deletes the target salon — a sibling's data is untouched", () => {
+    const victim = seedSalonWithData("+5255000222");
+    const keep = seedSalonWithData("+5255000333");
+
+    deleteSalon(db, victim.id);
+
+    expect(countRows(victim.id).salons).toBe(0);
+    // The other tenant is fully intact.
+    expect(countRows(keep.id)).toEqual({
+      salons: 1,
+      services: 1,
+      slots: 1,
+      contacts: 1,
+      appointments: 1,
+      campaigns: 1,
+    });
+  });
+});
+
+describe("getSalonDataCounts", () => {
+  it("reports per-table counts for the salon", () => {
+    const salon = makeSalon("+5255000444");
+    addService(db, {
+      salon_id: salon.id,
+      name: "Tinte",
+      duration_min: 60,
+      price: 500,
+    });
+    addService(db, {
+      salon_id: salon.id,
+      name: "Peinado",
+      duration_min: 45,
+    });
+    setSlotsForSalon(db, salon.id, [
+      { day_of_week: 2, start_time: "10:00", end_time: "19:00" },
+    ]);
+    const contact = makeContact(salon.id, "+5255000445");
+    makeAppointment(salon.id, contact.id);
+    createCampaign(db, { salon_id: salon.id, contact_id: contact.id });
+
+    expect(getSalonDataCounts(db, salon.id)).toEqual({
+      services: 2,
+      slots: 1,
+      contacts: 1,
+      appointments: 1,
+      campaigns: 1,
+    });
+  });
+
+  it("is all-zeros for a salon with no data", () => {
+    const salon = makeSalon("+5255000446");
+    expect(getSalonDataCounts(db, salon.id)).toEqual({
+      services: 0,
+      slots: 0,
+      contacts: 0,
+      appointments: 0,
+      campaigns: 0,
+    });
+  });
+});
 
 describe("createSalon", () => {
   it("creates a salon with a token", () => {

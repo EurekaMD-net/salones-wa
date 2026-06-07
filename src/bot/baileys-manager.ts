@@ -6,7 +6,7 @@
  * In dev/test mode (SALONES_ENV=test), this module is a no-op stub.
  */
 
-import { mkdirSync, readFileSync } from "fs";
+import { mkdirSync, readFileSync, rmSync } from "fs";
 import { join } from "path";
 import type Database from "better-sqlite3";
 import { getSalonByPhone, upsertContact } from "../db/models.js";
@@ -338,6 +338,66 @@ export async function reinitBaileysForSalon(
 ): Promise<BaileysInstance> {
   instances.delete(salonId);
   return initBaileysForSalon(options, salonId, salonPhone);
+}
+
+/** How long to wait for a graceful logout() before abandoning it during a
+ * salon delete. A half-open socket can leave logout() hanging indefinitely, so
+ * we never let it block the deletion — the instance is already removed from the
+ * map and superseded, so a lingering background logout is harmless. */
+const DELETE_LOGOUT_TIMEOUT_MS = 5000;
+
+/**
+ * Permanently tear down a salon's Baileys presence when the salon is DELETED.
+ * Unlike reinitBaileysForSalon (which preserves creds for a silent re-auth),
+ * this DOES log out — the salon is gone, so the WhatsApp linked-device slot and
+ * the on-disk session should be released.
+ *
+ * Best-effort and NON-THROWING by contract: the caller (admin delete route)
+ * must still remove the DB row even if WA logout fails, so every step is
+ * guarded and logout() is raced against a timeout. Order matters: the instance
+ * is dropped from the map and the generation is bumped FIRST, so the bot stops
+ * answering immediately and any surviving zombie socket's late events no-op —
+ * even if the subsequent logout() hangs or rejects.
+ */
+export async function removeBaileysForSalon(
+  options: BaileysManagerOptions,
+  salonId: string,
+): Promise<void> {
+  // Supersede any in-flight/zombie socket so its handlers go inert (qa-C1).
+  socketGenerations.set(salonId, (socketGenerations.get(salonId) ?? 0) + 1);
+
+  const instance = instances.get(salonId);
+  instances.delete(salonId); // stop sends/receives immediately, pre-logout
+  if (instance) {
+    try {
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        instance.disconnect(), // sock.logout() — releases the WA device link
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, DELETE_LOGOUT_TIMEOUT_MS);
+          timer.unref?.();
+        }),
+      ]);
+      if (timer) clearTimeout(timer);
+    } catch (err) {
+      console.warn(
+        `[baileys] [${salonId}] logout during delete failed (ignored): ${(err as Error)?.message ?? String(err)}`,
+      );
+    }
+  }
+
+  // Remove the on-disk session dir so a stale session can't linger or re-auth.
+  // force:true → no throw if the dir was never created (never-linked salon).
+  try {
+    rmSync(join(options.sessionsDir, salonId), {
+      recursive: true,
+      force: true,
+    });
+  } catch (err) {
+    console.warn(
+      `[baileys] [${salonId}] session dir cleanup failed (ignored): ${(err as Error)?.message ?? String(err)}`,
+    );
+  }
 }
 
 /**

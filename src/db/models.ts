@@ -161,6 +161,50 @@ export function setSalonActive(
   );
 }
 
+/**
+ * Permanently delete a salon and ALL of its data. Every child table
+ * (services, slots, contacts, appointments, campaigns) declares
+ * `ON DELETE CASCADE` on salon_id, and the connection runs with
+ * `PRAGMA foreign_keys=ON` (set in SCHEMA_SQL — verified to persist for the
+ * connection), so this single DELETE cascades to remove every dependent row in
+ * one atomic statement. Irreversible: the admin layer gates it behind a
+ * typed-name confirmation. Unlike setSalonActive(false) (a reversible soft
+ * "off"), this destroys the tenant. Returns the number of salon rows removed
+ * (1 if it existed, 0 otherwise).
+ */
+export function deleteSalon(db: Database.Database, id: string): number {
+  return db.prepare("DELETE FROM salons WHERE id = ?").run(id).changes;
+}
+
+/**
+ * Row counts of a salon's dependent data, shown on the delete-confirmation
+ * screen so the operator sees exactly what the cascade will erase before
+ * confirming. Separate prepared statements (no interpolated table names) keep
+ * this injection-proof.
+ */
+export function getSalonDataCounts(
+  db: Database.Database,
+  salon_id: string,
+): {
+  services: number;
+  slots: number;
+  contacts: number;
+  appointments: number;
+  campaigns: number;
+} {
+  const one = (sql: string): number =>
+    (db.prepare(sql).get(salon_id) as { n: number }).n;
+  return {
+    services: one("SELECT COUNT(*) AS n FROM services WHERE salon_id = ?"),
+    slots: one("SELECT COUNT(*) AS n FROM slots WHERE salon_id = ?"),
+    contacts: one("SELECT COUNT(*) AS n FROM contacts WHERE salon_id = ?"),
+    appointments: one(
+      "SELECT COUNT(*) AS n FROM appointments WHERE salon_id = ?",
+    ),
+    campaigns: one("SELECT COUNT(*) AS n FROM campaigns WHERE salon_id = ?"),
+  };
+}
+
 export function createService(
   db: Database.Database,
   data: {

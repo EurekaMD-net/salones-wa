@@ -145,6 +145,13 @@ export const Messages = {
     return "Listo, te damos de baja de los recordatorios. ¡Cuando quieras reagendarte, escríbenos! 👍";
   },
 
+  // ─── Closing pleasantry ───────────────────────────────────────────────────
+  // Warm acknowledgement for a "gracias" once the conversation has wrapped up —
+  // so a polite goodbye gets a human reply, not a cold reload of the menu.
+  thanks(): string {
+    return "¡Para servirte! 💕 Cuando necesites algo más, aquí estoy 😊";
+  },
+
   // ─── Fallback ─────────────────────────────────────────────────────────────
   fallback(): string {
     return "¿En qué te puedo ayudar? Puedo:\n✅ Agendar una cita\n📋 Decirte cuándo es tu próxima cita\n🔄 Cambiar tu cita\n❌ Cancelar tu cita";

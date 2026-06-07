@@ -14,6 +14,7 @@ export type Intent =
   | { type: "opt_out" }
   | { type: "reactivation_yes" }
   | { type: "reactivation_no" }
+  | { type: "thanks" }
   | { type: "unknown"; raw: string };
 
 const BOOK_PATTERNS = [
@@ -89,6 +90,19 @@ const REACTIVATION_NO_PATTERNS = [
   /\bno quiero\b/i,
 ];
 
+// THANKS: a closing pleasantry ("gracias", "muchas gracias", "muy amable").
+// Checked LAST in parseIntent so a real request that happens to include a
+// "gracias" ("gracias, quiero cancelar") routes to its action first; only an
+// otherwise-actionless message of pure gratitude lands here. Covers common
+// typos/slang (grasias, graxias, grax). The negation guard keeps refusals like
+// "no gracias" / "ahorita no, gracias" OUT (they're declines, not gratitude).
+const THANKS_PATTERNS = [
+  /\b(muchas?\s+|mil\s+|un\s+mill[oó]n\s+de\s+)?(gracias|grasias|graxias|graciass|grax)\b/i,
+  /\b(muy|qu[eé])\s+amable\b/i,
+  /\bte\s+lo\s+agradezco\b/i,
+];
+const THANKS_NEGATION_PATTERNS = [/\bno\b/i];
+
 function matchAny(text: string, patterns: RegExp[]): boolean {
   return patterns.some((p) => p.test(text));
 }
@@ -162,6 +176,15 @@ export function parseIntent(text: string, context?: "reactivation"): Intent {
 
   if (matchAny(trimmed, QUERY_APPOINTMENT_PATTERNS)) {
     return { type: "query_appointment" };
+  }
+
+  // Closing pleasantry — LAST, so it only catches messages that didn't match
+  // any actionable intent above. Negation guard excludes "no gracias" refusals.
+  if (
+    matchAny(trimmed, THANKS_PATTERNS) &&
+    !matchAny(trimmed, THANKS_NEGATION_PATTERNS)
+  ) {
+    return { type: "thanks" };
   }
 
   return { type: "unknown", raw: trimmed };

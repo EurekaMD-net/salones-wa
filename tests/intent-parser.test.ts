@@ -184,6 +184,45 @@ describe("parseIntent", () => {
     });
   });
 
+  describe("thanks", () => {
+    it.each([
+      "gracias",
+      "Gracias!",
+      "muchas gracias",
+      "mil gracias 🙏",
+      "ok gracias",
+      "perfecto, muchas gracias",
+      "gracias por todo",
+      "grasias",
+      "grax",
+      "muy amable",
+      "qué amable, gracias",
+      "te lo agradezco",
+    ])('maps "%s" to thanks', (text) => {
+      expect(parseIntent(text).type).toBe("thanks");
+    });
+
+    it('does NOT map "no gracias" to thanks (it is a refusal)', () => {
+      expect(parseIntent("no gracias").type).not.toBe("thanks");
+    });
+
+    it('does NOT map "ahorita no, gracias" to thanks', () => {
+      expect(parseIntent("ahorita no, gracias").type).not.toBe("thanks");
+    });
+
+    it("actionable intents win over a trailing gracias (precedence)", () => {
+      expect(parseIntent("gracias, quiero cancelar mi cita").type).toBe(
+        "cancel",
+      );
+      expect(parseIntent("gracias, ¿a qué hora es mi cita?").type).toBe(
+        "query_appointment",
+      );
+      expect(parseIntent("gracias, quiero cambiar mi cita").type).toBe(
+        "reschedule",
+      );
+    });
+  });
+
   describe("unknown", () => {
     it("returns unknown for unrecognized text", () => {
       const r = parseIntent("jajajaja qué onda");

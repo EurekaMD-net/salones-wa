@@ -418,4 +418,29 @@ describe("handleInboundMessage", () => {
       expect(n).toBe(1);
     });
   });
+
+  describe("closing pleasantry (gracias)", () => {
+    it('replies "para servirte" to a standalone gracias, not the menu', async () => {
+      const result = await send("muchas gracias!");
+      expect(result.reply).toContain("Para servirte");
+      // Must NOT reload the top menu.
+      expect(result.reply).not.toContain("Agendar una cita");
+    });
+
+    it("warmly closes after a completed booking (the real scenario)", async () => {
+      await send("quiero cita para corte");
+      const confirm = await send("1");
+      expect(confirm.reply).toContain("✅"); // booked → state cleared
+      const bye = await send("gracias 🙏");
+      expect(bye.reply).toContain("Para servirte");
+    });
+
+    it("does NOT short-circuit a gracias mid-flow — re-prompts instead", async () => {
+      await send("quiero cita para corte"); // now awaiting slot selection
+      const result = await send("gracias");
+      // Still in the flow: re-prompts for a number, no "para servirte".
+      expect(result.reply).not.toContain("Para servirte");
+      expect(result.reply?.toLowerCase()).toContain("número");
+    });
+  });
 });

@@ -119,6 +119,15 @@ export async function handleInboundMessage(
     return { reply: Messages.optOutConfirmed() };
   }
 
+  // ─── Thanks / closing pleasantry ──────────────────────────────────────────
+  // A "gracias" once the conversation has wrapped (no active flow) gets a warm
+  // "para servirte" instead of a cold reload of the top menu. Guarded on !state
+  // so a "gracias" mid-flow still routes through the active flow below (e.g.
+  // a slot-selection step re-prompts for the number rather than closing out).
+  if (intent.type === "thanks" && !state) {
+    return { reply: Messages.thanks() };
+  }
+
   // ─── Pending cancel confirm ───────────────────────────────────────────
   if (state?.step === "awaiting_cancel_confirm") {
     if (intent.type === "confirm") {

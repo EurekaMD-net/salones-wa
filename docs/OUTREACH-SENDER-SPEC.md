@@ -4,15 +4,16 @@
 > Scope: the _send-side_ of the Gilda cold-outreach pilot. Validation (the 277
 > WA-valid prospects) is already done. This is what turns that list into a
 > tracked, ban-safe, reply-aware campaign run from **one fresh WhatsApp Business
-> number** — never the personal (`5530331051`) or product/bot (`5640501088`) line.
+> number** — never the operator's personal line or the product/bot (`5640501088`) line.
 >
-> **Build status (2026-06-07):** **P0 done** — new isolated service scaffolded at
-> `/root/claude/projects/gilda-outreach/` (its own local git repo; remote choice
-> = open question §11.4, not pushed yet). Schema + prospect models + idempotent
-> Google-Sheet import (dedupe on `wa_jid`) + the forbidden-number guard
-> (`5530331051`/`5640501088` rejected at import) are built and tested (36 tests,
-> all green). The live 277-row load is an operator-run command (creds from
-> mc/.env; see the repo README). **P1+ blocked on SIM hardware.**
+> **Build status (2026-06-07):** **P0 done** — isolated service at repo
+> `EurekaMD-net/gilda-outreach`. Schema + prospect models + idempotent
+> Google-Sheet import (dedupe on `wa_jid`) + a no-outreach blocklist enforced in
+> code at import (bot `5640501088` blocked by default; the personal line is
+> supplied via `OUTREACH_BLOCKLIST` in the gitignored `.env`, never in source).
+> Built and tested (40 tests, all green). The live 277-row load is an
+> operator-run command (creds from mc/.env; see the repo README). **P1+ blocked
+> on SIM hardware.**
 
 ---
 
@@ -39,7 +40,7 @@ number looks like it's being flagged.
 > **Update 2026-06-07 — operator has TWO SIMs.** Assignment:
 >
 > - **SIM #1 → Brand** (`number_id='brand'`): the stable, protected, long-term
->   face. Goes on the landing CTA (off your personal `5530331051`), handles
+>   face. Goes on the landing CTA (off your personal line), handles
 >   inbound from the landing + lead hand-offs, kept low-volume and clean.
 > - **SIM #2 → Outreach** (`number_id='outreach'`): the cold-send, ban-prone,
 >   semi-disposable number. Does the cold DMs; if it cools/bans you lose only it.
@@ -272,7 +273,7 @@ ALERTS → existing mc operator channel (NOT the outreach number)
 ## 11. Open questions (answer when you're back)
 
 1. **New number's WhatsApp profile name** — "Gilda" / "Gilda — Agenda WhatsApp" / your name? (Shown to every prospect.)
-2. **Landing CTA** — move it off your personal `5530331051` to this new number, or keep the CTA on a separate protected number? (Recommend: the fresh number doubles as brand+outreach for the pilot, so the CTA points to it.)
+2. **Landing CTA** — move it off your personal line to this new number, or keep the CTA on a separate protected number? (Recommend: the fresh number doubles as brand+outreach for the pilot, so the CTA points to it.)
 3. **Reply alerts channel** — your personal WhatsApp (via the product bot) or Telegram?
 4. **Where it lives** — its own repo `gilda-outreach`, or a module folder. (Recommend its own repo for isolation.)
 

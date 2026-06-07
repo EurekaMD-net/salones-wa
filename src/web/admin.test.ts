@@ -3,7 +3,7 @@
  * Covers: auth guard, salon CRUD, service management, toggle
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { initDb } from "../db/database.js";
 import { createAdminPanel } from "./admin.js";
 import {
@@ -1045,5 +1045,61 @@ describe("Admin Panel — Delete salon", () => {
     expect(res.status).toBe(403);
     expect(getSalonById(db, salon.id)).not.toBeNull();
     expect(onSalonDeleted).not.toHaveBeenCalled();
+  });
+});
+
+describe("Admin Panel — PUBLIC_APP_URL in owner-panel links", () => {
+  let db: Database.Database;
+  let app: ReturnType<typeof createAdminPanel>;
+  const prev = process.env["PUBLIC_APP_URL"];
+
+  beforeEach(() => {
+    db = initDb(":memory:");
+    process.env["ADMIN_TOKEN"] = ADMIN_TOKEN;
+    app = createAdminPanel(db);
+  });
+
+  afterEach(() => {
+    if (prev === undefined) delete process.env["PUBLIC_APP_URL"];
+    else process.env["PUBLIC_APP_URL"] = prev;
+  });
+
+  it("uses PUBLIC_APP_URL for the panel link and drops the localhost hint", async () => {
+    process.env["PUBLIC_APP_URL"] = "https://app.gilda.mx";
+    const salon = createSalon(db, { name: "Salón URL", phone: "5255000010" });
+    const res = await get(
+      app,
+      `/admin/salones/${salon.id}?token=${ADMIN_TOKEN}`,
+    );
+    const html = await res.text();
+    expect(html).toContain(
+      `https://app.gilda.mx/panel/dashboard?token=${salon.token}`,
+    );
+    expect(html).not.toContain("localhost:8085");
+    expect(html).not.toContain("Reemplaza");
+  });
+
+  it("falls back to localhost + shows the hint when PUBLIC_APP_URL is unset", async () => {
+    delete process.env["PUBLIC_APP_URL"];
+    const salon = createSalon(db, { name: "Salón Local", phone: "5255000011" });
+    const res = await get(
+      app,
+      `/admin/salones/${salon.id}?token=${ADMIN_TOKEN}`,
+    );
+    const html = await res.text();
+    expect(html).toContain("http://localhost:8085/panel/dashboard");
+    expect(html).toContain("Reemplaza");
+  });
+
+  it("strips a trailing slash on PUBLIC_APP_URL so the join doesn't double up", async () => {
+    process.env["PUBLIC_APP_URL"] = "https://app.gilda.mx/";
+    const salon = createSalon(db, { name: "Salón Slash", phone: "5255000012" });
+    const res = await get(
+      app,
+      `/admin/salones/${salon.id}?token=${ADMIN_TOKEN}`,
+    );
+    const html = await res.text();
+    expect(html).toContain("https://app.gilda.mx/panel/dashboard");
+    expect(html).not.toContain("app.gilda.mx//panel");
   });
 });

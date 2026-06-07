@@ -64,6 +64,27 @@ function isValidPhone(phone: string): boolean {
   return /^\d{10,15}$/.test(phone);
 }
 
+/** Public base URL for owner-facing links (the dueña's panel). Set
+ * PUBLIC_APP_URL (e.g. https://app.gilda.mx) in production so the links are
+ * actually shareable; falls back to the local bind address for dev. Trailing
+ * slashes are stripped so the join below never doubles up. */
+function publicBaseUrl(): string {
+  const raw = process.env["PUBLIC_APP_URL"]?.trim();
+  if (raw) return raw.replace(/\/+$/, "");
+  return `http://localhost:${process.env["PORT"] ?? "8085"}`;
+}
+
+/** True when PUBLIC_APP_URL is configured — gates the "replace localhost"
+ * hint so it only shows in dev (where the URL really is localhost). */
+function hasPublicUrl(): boolean {
+  return !!process.env["PUBLIC_APP_URL"]?.trim();
+}
+
+/** The dueña's panel URL for a salon token, rooted at the public base. */
+function panelUrlFor(token: string): string {
+  return `${publicBaseUrl()}/panel/dashboard?token=${token}`;
+}
+
 /** Check CSRF: Origin or Referer must match the request Host */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function checkCsrf(c: Context<any, any, any>): boolean {
@@ -466,7 +487,7 @@ export function createAdminPanel(
       });
     }
 
-    const panelUrl = `http://localhost:8085/panel/dashboard?token=${salon.token}`;
+    const panelUrl = panelUrlFor(salon.token);
     const body = `
       <div class="alert alert-success">✅ Salón <strong>${escapeHtml(salon.name)}</strong> creado exitosamente.</div>
       <div class="card">
@@ -474,7 +495,7 @@ export function createAdminPanel(
         <div class="card-body">
           <p style="margin-bottom:12px;font-size:0.9rem;color:#555">Comparte esta URL con la dueña del salón. Es su acceso al panel de citas:</p>
           <div class="panel-url">${panelUrl}</div>
-          <p style="margin-top:8px;font-size:0.8rem;color:#999">⚠️ Cambia <code>localhost</code> por la IP o dominio del servidor antes de compartir.</p>
+          ${hasPublicUrl() ? "" : '<p style="margin-top:8px;font-size:0.8rem;color:#999">⚠️ Cambia <code>localhost</code> por la IP o dominio del servidor antes de compartir.</p>'}
           <div style="margin-top:16px;display:flex;gap:8px">
             <a href="/admin/salones/${salon.id}?token=${adminToken}" class="btn btn-secondary">Editar servicios</a>
             <a href="/admin?token=${adminToken}" class="btn btn-primary">← Volver a lista</a>
@@ -492,7 +513,7 @@ export function createAdminPanel(
     if (!salon) return c.text("Salón no encontrado", 404);
 
     const services = getServices(db, salon.id);
-    const panelUrl = `http://localhost:8085/panel/dashboard?token=${salon.token}`;
+    const panelUrl = panelUrlFor(salon.token);
 
     const serviceRows = services
       .map(
@@ -570,7 +591,7 @@ export function createAdminPanel(
         <div class="card-header"><h2>URL del panel (dueña)</h2></div>
         <div class="card-body">
           <div class="panel-url">${panelUrl}</div>
-          <p style="margin-top:8px;font-size:0.8rem;color:#999">Reemplaza <code>localhost</code> por la IP o dominio del servidor.</p>
+          ${hasPublicUrl() ? "" : '<p style="margin-top:8px;font-size:0.8rem;color:#999">Reemplaza <code>localhost</code> por la IP o dominio del servidor.</p>'}
         </div>
       </div>
 

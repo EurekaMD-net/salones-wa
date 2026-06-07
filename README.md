@@ -248,6 +248,9 @@ PORT=8085              # Puerto del panel web (default: 8085)
 DB_PATH=./data/salones.db  # Ruta SQLite (default: ./data/salones.db)
 SESSIONS_DIR=./data/sessions  # Sesiones Baileys (default: ./data/sessions)
 ADMIN_TOKEN=...        # Requerido, ≥16 chars. Protege /admin, /metrics, /health/salons
+PUBLIC_APP_URL=https://app.gilda.mx  # Base pública para los links del panel de la dueña
+                       # (default: http://localhost:<PORT>). Sin esto, el admin muestra
+                       # "localhost" y un aviso para reemplazarlo antes de compartir.
 SALON_DISCONNECT_ALERT_HOURS=24  # Umbral "salón caído" para disconnect-watch + /metrics (default 24, mín 1)
 # Liveness watchdog (auto-reconecta sockets Baileys atorados):
 BAILEYS_WATCHDOG_ENABLED=true        # Kill switch (default on; "false" lo apaga)

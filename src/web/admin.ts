@@ -494,7 +494,7 @@ export function createAdminPanel(
         <div class="card-header"><h2>URL del panel para la dueña</h2></div>
         <div class="card-body">
           <p style="margin-bottom:12px;font-size:0.9rem;color:#555">Comparte esta URL con la dueña del salón. Es su acceso al panel de citas:</p>
-          <div class="panel-url">${panelUrl}</div>
+          <div class="panel-url">${escapeHtml(panelUrl)}</div>
           ${hasPublicUrl() ? "" : '<p style="margin-top:8px;font-size:0.8rem;color:#999">⚠️ Cambia <code>localhost</code> por la IP o dominio del servidor antes de compartir.</p>'}
           <div style="margin-top:16px;display:flex;gap:8px">
             <a href="/admin/salones/${salon.id}?token=${adminToken}" class="btn btn-secondary">Editar servicios</a>
@@ -590,7 +590,7 @@ export function createAdminPanel(
       <div class="card" style="margin-bottom:16px">
         <div class="card-header"><h2>URL del panel (dueña)</h2></div>
         <div class="card-body">
-          <div class="panel-url">${panelUrl}</div>
+          <div class="panel-url">${escapeHtml(panelUrl)}</div>
           ${hasPublicUrl() ? "" : '<p style="margin-top:8px;font-size:0.8rem;color:#999">Reemplaza <code>localhost</code> por la IP o dominio del servidor.</p>'}
         </div>
       </div>

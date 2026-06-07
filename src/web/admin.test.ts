@@ -1102,4 +1102,17 @@ describe("Admin Panel — PUBLIC_APP_URL in owner-panel links", () => {
     expect(html).toContain("https://app.gilda.mx/panel/dashboard");
     expect(html).not.toContain("app.gilda.mx//panel");
   });
+
+  it("escapes a hostile PUBLIC_APP_URL in the panel-url sink (qa-W1)", async () => {
+    process.env["PUBLIC_APP_URL"] =
+      "https://x.mx/</div><script>alert(1)</script>";
+    const salon = createSalon(db, { name: "Salón XSS", phone: "5255000013" });
+    const res = await get(
+      app,
+      `/admin/salones/${salon.id}?token=${ADMIN_TOKEN}`,
+    );
+    const html = await res.text();
+    expect(html).not.toContain("</div><script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;");
+  });
 });

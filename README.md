@@ -96,12 +96,12 @@ salones-wa/
 │   │   ├── panel.ts                # /panel/* — dashboard, contactos, campañas (auth: salon token)
 │   │   ├── panel.test.ts           # 24 tests
 │   │   ├── admin.ts                # /admin/* — CRUD + borrado de salones + servicios (auth: ADMIN_TOKEN)
-│   │   └── admin.test.ts           # 51 tests (incluye pins P0-1 + borrado de salón)
+│   │   └── admin.test.ts           # 55 tests (pins P0-1 + borrado de salón + PUBLIC_APP_URL/escape)
 │   └── index.ts                    # Entry point + graceful shutdown
 ├── tests/
-│   ├── intent-parser.test.ts       # 39 tests
+│   ├── intent-parser.test.ts       # 54 tests  (+ thanks/gracias intent + precedence)
 │   ├── models.test.ts              # 44 tests  (includes P0-2 idempotence pin + deleteSalon cascade)
-│   ├── message-handler.test.ts     # 33 tests
+│   ├── message-handler.test.ts     # 36 tests  (+ closing-gracias "para servirte")
 │   ├── conversation-state.test.ts  # 6 tests
 │   ├── web-panel.test.ts           # 9 tests
 │   ├── slot-finder.test.ts         # 22 tests  (working-hours + conflicts + alternatives)
@@ -390,7 +390,7 @@ Una vez vinculado: `[baileys] [<phone>] connected ✅` en journalctl y archivos 
 npm install
 
 # Ejecutar tests
-npm test            # 327/327 ✅
+npm test            # 349/349 ✅
 
 # Typecheck
 npm run typecheck   # 0 errores

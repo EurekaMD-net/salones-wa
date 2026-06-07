@@ -94,18 +94,23 @@ salones-wa/
 │   │   └── schema.ts               # DDL SQLite — 6 tablas + índices
 │   ├── web/
 │   │   ├── panel.ts                # /panel/* — dashboard, contactos, campañas (auth: salon token)
-│   │   ├── admin.ts                # /admin/* — CRUD salones + servicios (auth: ADMIN_TOKEN)
-│   │   └── admin.test.ts           # 18 tests (incluye pins P0-1)
+│   │   ├── panel.test.ts           # 24 tests
+│   │   ├── admin.ts                # /admin/* — CRUD + borrado de salones + servicios (auth: ADMIN_TOKEN)
+│   │   └── admin.test.ts           # 51 tests (incluye pins P0-1 + borrado de salón)
 │   └── index.ts                    # Entry point + graceful shutdown
 ├── tests/
 │   ├── intent-parser.test.ts       # 39 tests
-│   ├── models.test.ts              # 33 tests  (includes P0-2 idempotence pin)
-│   ├── message-handler.test.ts     # 32 tests
+│   ├── models.test.ts              # 44 tests  (includes P0-2 idempotence pin + deleteSalon cascade)
+│   ├── message-handler.test.ts     # 33 tests
 │   ├── conversation-state.test.ts  # 6 tests
 │   ├── web-panel.test.ts           # 9 tests
-│   ├── slot-finder.test.ts         # 16 tests  (working-hours + conflicts + alternatives)
-│   └── datetime-parser.test.ts     # 24 tests  (Spanish day+time parser + audit C1/W2 pins)
-│                                   # (admin.test.ts colocado en src/web/)
+│   ├── slot-finder.test.ts         # 22 tests  (working-hours + conflicts + alternatives)
+│   ├── datetime-parser.test.ts     # 24 tests  (Spanish day+time parser + audit C1/W2 pins)
+│   ├── date-extract.test.ts        # 18 tests
+│   ├── baileys-state.test.ts       # 40 tests  (liveness watchdog + conn-state registry)
+│   ├── baileys-manager.test.ts     # 2 tests   (removeBaileysForSalon teardown)
+│   └── observability.test.ts       # 15 tests  (/health/salons + /metrics)
+│                                   # (admin.test.ts + panel.test.ts colocados en src/web/)
 ├── docs/
 │   ├── MVP-PLAN.md                 # Plan completo del MVP
 │   ├── SCHEMA.md                   # Schema SQLite documentado
@@ -359,17 +364,19 @@ Una vez vinculado: `[baileys] [<phone>] connected ✅` en journalctl y archivos 
 
 ### Rutas del admin
 
-| Ruta                                             | Descripción                                                                                          |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| `GET /admin`                                     | Lista todos los salones                                                                              |
-| `GET /admin/salones/new`                         | Formulario crear salón                                                                               |
-| `POST /admin/salones`                            | Crear salón + servicios                                                                              |
-| `GET /admin/salones/:id`                         | Editar nombre, teléfono, servicios, horario                                                          |
-| `POST /admin/salones/:id/edit`                   | Guardar cambios                                                                                      |
-| `POST /admin/salones/:id/hours`                  | Guardar horario de atención (un turno por día; sin días marcados = horario por defecto Lun-Sáb 9-19) |
-| `POST /admin/salones/:id/toggle`                 | Activar / desactivar                                                                                 |
-| `POST /admin/salones/:id/services`               | Agregar servicio                                                                                     |
-| `POST /admin/salones/:id/services/:svcId/delete` | Eliminar servicio                                                                                    |
+| Ruta                                             | Descripción                                                                                                       |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `GET /admin`                                     | Lista todos los salones                                                                                           |
+| `GET /admin/salones/new`                         | Formulario crear salón                                                                                            |
+| `POST /admin/salones`                            | Crear salón + servicios                                                                                           |
+| `GET /admin/salones/:id`                         | Editar nombre, teléfono, servicios, horario                                                                       |
+| `POST /admin/salones/:id/edit`                   | Guardar cambios                                                                                                   |
+| `POST /admin/salones/:id/hours`                  | Guardar horario de atención (un turno por día; sin días marcados = horario por defecto Lun-Sáb 9-19)              |
+| `POST /admin/salones/:id/toggle`                 | Activar / desactivar (reversible)                                                                                 |
+| `GET /admin/salones/:id/delete`                  | Pantalla de confirmación de borrado permanente (muestra qué se eliminará)                                         |
+| `POST /admin/salones/:id/delete`                 | Eliminar salón **permanentemente** — requiere escribir el nombre; cascada a todos sus datos + desconecta WhatsApp |
+| `POST /admin/salones/:id/services`               | Agregar servicio                                                                                                  |
+| `POST /admin/salones/:id/services/:svcId/delete` | Eliminar servicio                                                                                                 |
 
 ---
 
@@ -380,7 +387,7 @@ Una vez vinculado: `[baileys] [<phone>] connected ✅` en journalctl y archivos 
 npm install
 
 # Ejecutar tests
-npm test            # 109/109 ✅
+npm test            # 327/327 ✅
 
 # Typecheck
 npm run typecheck   # 0 errores

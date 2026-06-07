@@ -18,6 +18,12 @@ export interface BaileysInstance {
   salonPhone: string;
   sendMessage: (toPhone: string, text: string) => Promise<void>;
   disconnect: () => Promise<void>;
+  /**
+   * Presence check — returns whether the given WA number has an active WhatsApp account.
+   * Uses onWhatsApp() — silent, no message sent.
+   * Throws if the socket is disconnected or WA returns an error.
+   */
+  checkWA: (waNumber: string) => Promise<{ exists: boolean; jid: string | null }>;
 }
 
 export interface BaileysManagerOptions {
@@ -58,6 +64,10 @@ function createStubInstance(
     },
     disconnect: async () => {
       instances.delete(salonId);
+    },
+    checkWA: async (_waNumber: string) => {
+      // Stub: always returns false in test environment
+      return { exists: false, jid: null };
     },
   };
 }
@@ -309,6 +319,14 @@ export async function initBaileysForSalon(
     disconnect: async () => {
       await sock.logout();
       instances.delete(salonId);
+    },
+    checkWA: async (waNumber: string) => {
+      const results = await sock.onWhatsApp(waNumber);
+      const found = results?.[0];
+      return {
+        exists: found?.exists === true,
+        jid: found?.jid ?? null,
+      };
     },
   };
 

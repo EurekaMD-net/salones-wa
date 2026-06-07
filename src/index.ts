@@ -105,6 +105,35 @@ async function main() {
     );
   });
 
+  // ─── Internal: WA presence check endpoint (loopback only) ───────────
+  // POST /internal/check-wa  { "numbers": ["521XXXXXXXXXX", ...] }
+  // Returns: { results: [{ number, exists, jid }] }
+  // Used by scripts/validate-wa-numbers.mjs instead of spawning a second socket.
+  // No auth required — endpoint only reachable from 127.0.0.1 (bound host).
+  app.post("/internal/check-wa", async (c) => {
+    const body = await c.req.json<{ numbers: string[] }>().catch(() => null);
+    if (!body?.numbers || !Array.isArray(body.numbers)) {
+      return c.json({ error: "body must have { numbers: string[] }" }, 400);
+    }
+    // Use the first available Baileys instance
+    const { getAllInstances } = await import("./bot/baileys-manager.js");
+    const instances = getAllInstances();
+    if (instances.length === 0) {
+      return c.json({ error: "no active Baileys instances" }, 503);
+    }
+    const instance = instances[0]!;
+    const results = [];
+    for (const number of body.numbers.slice(0, 50)) {
+      try {
+        const r = await instance.checkWA(number);
+        results.push({ number, exists: r.exists, jid: r.jid });
+      } catch (err) {
+        results.push({ number, exists: false, jid: null, error: String(err) });
+      }
+    }
+    return c.json({ results });
+  });
+
   // ─── Crons ───────────────────────────────────────────────────────────
   const sendMessageAdapter = async (
     salonPhone: string,

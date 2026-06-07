@@ -1,10 +1,18 @@
 # Gilda Outreach Sender — Spec (pilot, one fresh number)
 
-> Status: **DRAFT for approval** · Author: Claude · 2026-06-07
+> Status: **APPROVED · P0 shipped** · Author: Claude · 2026-06-07
 > Scope: the _send-side_ of the Gilda cold-outreach pilot. Validation (the 277
 > WA-valid prospects) is already done. This is what turns that list into a
 > tracked, ban-safe, reply-aware campaign run from **one fresh WhatsApp Business
 > number** — never the personal (`5530331051`) or product/bot (`5640501088`) line.
+>
+> **Build status (2026-06-07):** **P0 done** — new isolated service scaffolded at
+> `/root/claude/projects/gilda-outreach/` (its own local git repo; remote choice
+> = open question §11.4, not pushed yet). Schema + prospect models + idempotent
+> Google-Sheet import (dedupe on `wa_jid`) + the forbidden-number guard
+> (`5530331051`/`5640501088` rejected at import) are built and tested (36 tests,
+> all green). The live 277-row load is an operator-run command (creds from
+> mc/.env; see the repo README). **P1+ blocked on SIM hardware.**
 
 ---
 

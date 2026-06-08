@@ -10,9 +10,9 @@
 | Métrica           | Valor                                                            |
 | ----------------- | ---------------------------------------------------------------- |
 | **Fase**          | **En producción** — Salón Demo en vivo (525640501088)            |
-| **Tests**         | **257 / 257 ✅**                                                 |
+| **Tests**         | **420 / 420 ✅**                                                 |
 | **Typecheck**     | 0 errores                                                        |
-| **Último commit** | 2026-06-04                                                       |
+| **Último commit** | 2026-06-08                                                       |
 | **Servicio**      | `salones-wa` (systemd, usuario dedicado, bind `127.0.0.1:8085`)  |
 | **URL pública**   | `https://gilda.mx` (landing) · `https://app.gilda.mx` (servicio) |
 | **Admin panel**   | `https://app.gilda.mx/admin?token=<ADMIN_TOKEN>`                 |
@@ -84,6 +84,7 @@ salones-wa/
 │   │   ├── conversation-state.ts   # State machine en memoria, TTL 30min
 │   │   ├── intent-parser.ts        # Parser regex — 8 intents
 │   │   ├── message-handler.ts      # Handler principal — recibe texto, devuelve reply
+│   │   ├── name-extract.ts         # Extractor conservador del primer nombre (post-cita)
 │   │   └── messages.ts             # Copy del bot centralizado
 │   ├── crons/
 │   │   └── index.ts                # 6 jobs: remind-24h, remind-2h, mark-completed,
@@ -100,8 +101,9 @@ salones-wa/
 │   └── index.ts                    # Entry point + graceful shutdown
 ├── tests/
 │   ├── intent-parser.test.ts       # 54 tests  (+ thanks/gracias intent + precedence)
-│   ├── models.test.ts              # 44 tests  (includes P0-2 idempotence pin + deleteSalon cascade)
-│   ├── message-handler.test.ts     # 36 tests  (+ closing-gracias "para servirte")
+│   ├── models.test.ts              # 46 tests  (idempotence pin + deleteSalon cascade + setContactName/opt-out)
+│   ├── message-handler.test.ts     # 42 tests  (closing-gracias + captura de nombre post-cita)
+│   ├── name-extract.test.ts        # 63 tests  (primer nombre: lead-ins, stop-words, acentos, FP guards)
 │   ├── conversation-state.test.ts  # 6 tests
 │   ├── web-panel.test.ts           # 9 tests
 │   ├── slot-finder.test.ts         # 22 tests  (working-hours + conflicts + alternatives)
@@ -152,9 +154,21 @@ Bot:      "¡Hola! 👋 ¿Para cuándo? Tenemos disponible:
            3️⃣ Lunes 30 de mayo — 9:00am
            Responde 1, 2 o 3 para apartar tu lugar"
 Clienta:  "1"
-Bot:      "✅ Listo! Tu cita es el sábado 28 a las 10:00am para corte.
-           Te recordaré 24h antes. ¿Cambias algo?"
+Bot:      "✅ ¡Listo! Tu cita es el sábado 28 a las 10:00am para corte.
+           Te recordaré 24h antes. ¡Hasta entonces! 💇‍♀️
+
+           Por cierto, ¿cómo te llamas? Así te atiendo mejor 😊"
+Clienta:  "Soy María"
+Bot:      "¡Mucho gusto, María! 💕 Aquí estaré para lo que necesites."
 ```
+
+> **Captura del nombre.** Tras confirmar una cita, si aún no conocemos su
+> nombre, el bot lo pide **una sola vez** y lo guarda en `contacts.name`. A
+> partir de ahí la saluda por su nombre en confirmaciones, recordatorios y
+> reactivaciones, y nunca lo vuelve a preguntar. El nombre vive en la BD
+> **hasta que la clienta se da de baja** (`opt_out` lo borra). El extractor es
+> deliberadamente conservador: ante la duda no guarda nada (mejor sin nombre
+> que saludarla con un "Sí"/"Gracias" mal capturado).
 
 ### Flujo 2 — Anti-cancelación (outbound, crons)
 
@@ -186,7 +200,8 @@ Clienta:   "Sí! Quiero tinte"
 ```sql
 salons          -- Tenants (uno por salón), token UUID para panel auth
 services        -- Servicios y duración por salón
-contacts        -- Clientas: phone, visit_count, last_visit, dormant, opt_out
+contacts        -- Clientas: phone, name (capturado tras 1ra cita), visit_count,
+                --           last_visit, dormant, opt_out (borra name al darse de baja)
 appointments    -- Citas: status confirmed|cancelled|completed|no_show
                 --        reminded_24h, reminded_2h flags
 campaigns       -- Reactivaciones: sent_at, responded, booked

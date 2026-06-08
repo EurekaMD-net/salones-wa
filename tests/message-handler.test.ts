@@ -427,10 +427,14 @@ describe("handleInboundMessage", () => {
       expect(result.reply).not.toContain("Agendar una cita");
     });
 
-    it("warmly closes after a completed booking (the real scenario)", async () => {
+    it("warmly closes after the post-booking name step (the real scenario)", async () => {
       await send("quiero cita para corte");
       const confirm = await send("1");
-      expect(confirm.reply).toContain("✅"); // booked → state cleared
+      expect(confirm.reply).toContain("✅");
+      // Booking now asks her name once before the flow fully closes.
+      expect(confirm.reply).toContain("cómo te llamas");
+      // She shares it; a later gracias then gets the warm close, not the menu.
+      await send("Ana");
       const bye = await send("gracias 🙏");
       expect(bye.reply).toContain("Para servirte");
     });
@@ -441,6 +445,75 @@ describe("handleInboundMessage", () => {
       // Still in the flow: re-prompts for a number, no "para servirte".
       expect(result.reply).not.toContain("Para servirte");
       expect(result.reply?.toLowerCase()).toContain("número");
+    });
+  });
+
+  describe("client name capture (post-confirmation)", () => {
+    async function bookAndPark() {
+      await send("quiero cita para corte");
+      await send("1"); // books → parks in awaiting_client_name
+    }
+    function storedName(): string | null {
+      return (
+        db.prepare("SELECT name FROM contacts WHERE phone = ?").get(PHONE) as {
+          name: string | null;
+        }
+      ).name;
+    }
+
+    it("asks for her name right after a fresh confirmation", async () => {
+      await send("quiero cita para corte");
+      const confirm = await send("1");
+      expect(confirm.reply).toContain("✅");
+      expect(confirm.reply).toContain("cómo te llamas");
+      expect(conversationState.get(salonId, PHONE)?.step).toBe(
+        "awaiting_client_name",
+      );
+    });
+
+    it("stores the first name she replies and greets her, then clears state", async () => {
+      await bookAndPark();
+      const res = await send("soy María");
+      expect(res.reply).toContain("Mucho gusto, María");
+      expect(storedName()).toBe("María");
+      expect(conversationState.get(salonId, PHONE)).toBeNull();
+    });
+
+    it("greets a KNOWN clienta by name on her next booking and never re-asks", async () => {
+      await bookAndPark();
+      await send("Ana"); // name captured
+      await send("quiero otra cita para corte");
+      const confirm2 = await send("1");
+      expect(confirm2.reply).toContain("Ana"); // greeted by name
+      expect(confirm2.reply).not.toContain("cómo te llamas"); // not re-asked
+      expect(conversationState.get(salonId, PHONE)).toBeNull(); // closed at once
+    });
+
+    it("does NOT store a non-name reply (a decline) and never re-asks", async () => {
+      await bookAndPark();
+      const res = await send("no quiero dar mi nombre");
+      expect(res.reply).toContain("aquí estoy"); // nameSkipped
+      expect(storedName()).toBeNull();
+      expect(conversationState.get(salonId, PHONE)).toBeNull();
+    });
+
+    it("lets her step out of the name step with a real command (cancel)", async () => {
+      await bookAndPark();
+      const res = await send("quiero cancelar mi cita");
+      expect(res.reply).toContain("Confirmas la cancelación");
+      expect(storedName()).toBeNull();
+    });
+
+    it("clears the stored name when she opts out (kept only until opt-out)", async () => {
+      await bookAndPark();
+      await send("María");
+      expect(storedName()).toBe("María");
+      await send("ya no me mandes mensajes");
+      const c = db
+        .prepare("SELECT name, opt_out FROM contacts WHERE phone = ?")
+        .get(PHONE) as { name: string | null; opt_out: number };
+      expect(c.name).toBeNull();
+      expect(c.opt_out).toBe(1);
     });
   });
 });

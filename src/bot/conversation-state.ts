@@ -13,6 +13,7 @@ export type ConversationStep =
   | "awaiting_custom_time" // clienta chose "Otra fecha" — bot asked when
   | "awaiting_custom_time_confirm" // bot offered the parsed time, clienta confirms
   | "awaiting_cancel_confirm"
+  | "awaiting_client_name" // bot asked the clienta her name right after confirming a cita
   | "reactivation_sent"; // waiting for yes/no after reactivation outbound
 
 export interface ConversationState {

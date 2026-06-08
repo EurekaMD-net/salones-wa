@@ -6,3 +6,4 @@ data/salones.db-wal
 data/sessions/
 .env
 *.log
+.claude/

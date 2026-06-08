@@ -432,11 +432,25 @@ export function getDormantContacts(
     .all(salon_id, cutoff) as Contact[];
 }
 
+/** Persist the clienta's first name (captured after a confirmation). */
+export function setContactName(
+  db: Database.Database,
+  contact_id: string,
+  name: string,
+): void {
+  db.prepare("UPDATE contacts SET name = ? WHERE id = ?").run(name, contact_id);
+}
+
 export function markContactOptOut(
   db: Database.Database,
   contact_id: string,
 ): void {
-  db.prepare("UPDATE contacts SET opt_out = 1 WHERE id = ?").run(contact_id);
+  // Opt-out is the clienta's request to be forgotten: drop her name along with
+  // muting reminders, so it stops appearing on the dashboard and in greetings.
+  // (Spec: the captured name lives in the DB only UNTIL she opts out.)
+  db.prepare("UPDATE contacts SET opt_out = 1, name = NULL WHERE id = ?").run(
+    contact_id,
+  );
 }
 
 export function updateDormantFlags(db: Database.Database): number {

@@ -49,14 +49,28 @@ Clienta:  "Tinte"  o  "2"   ← match por nombre o índice
 Estado 2 — Selección de slot
 ──────────────────────────────
 Clienta:  "1"
-Bot:      "✅ Listo! Quedas agendada:
+Bot:      "✅ ¡Listo! Quedas agendada:
            📅 Sábado 28 de mayo a las 10:00am
            💇‍♀️ Servicio: Corte
-           Te recordaré 24h antes. ¡Hasta entonces! 💇‍♀️"
+           Te recordaré 24h antes. ¡Hasta entonces! 💇‍♀️
+
+           Por cierto, ¿cómo te llamas? Así te atiendo mejor 😊"
+
+Estado 3 — Captura de nombre (solo si aún no lo tenemos)
+──────────────────────────────
+Clienta:  "Soy María"
+Bot:      "¡Mucho gusto, María! 💕 Aquí estaré para lo que necesites."
+→ Se guarda en contacts.name; la saluda por su nombre en adelante.
 ```
 
 **Reglas:**
 
+- Tras confirmar, si `contacts.name` está vacío, el bot pide el nombre **una
+  vez** (estado `awaiting_client_name`). Lo guarda y la saluda por su nombre en
+  confirmaciones/recordatorios/reactivaciones; nunca lo vuelve a preguntar.
+  Borra el nombre al darse de baja (`opt_out`). Si responde con algo que no es
+  un nombre (un "sí", "gracias", un comando, o cambia de tema), no guarda nada
+  y no insiste. Extractor conservador: prefiere no guardar a guardar mal.
 - Mostrar 3 slots + 1 opción "Otra fecha" (Flujo 1c)
 - Un slot = franja de `service.duration_min` minutos dentro del horario del salón
 - Los slots respetan: ≥24h desde ahora, horario configurado del salón (default Mon-Sat 9-19), sin solapamientos con citas confirmadas

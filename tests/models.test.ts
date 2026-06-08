@@ -4,6 +4,8 @@ import {
   createSalon,
   addService,
   upsertContact,
+  setContactName,
+  markContactOptOut,
   createAppointment,
   cancelAppointment,
   completePassedAppointments,
@@ -291,6 +293,36 @@ describe("upsertContact", () => {
     const c1 = upsertContact(db, { salon_id: s1.id, phone: "+5255100001" });
     const c2 = upsertContact(db, { salon_id: s2.id, phone: "+5255100001" });
     expect(c1.id).not.toBe(c2.id);
+  });
+});
+
+describe("setContactName", () => {
+  it("persists a captured first name", () => {
+    const salon = makeSalon();
+    const c = upsertContact(db, { salon_id: salon.id, phone: "+5255100001" });
+    expect(c.name).toBeNull();
+    setContactName(db, c.id, "María");
+    const after = db
+      .prepare("SELECT name FROM contacts WHERE id = ?")
+      .get(c.id) as { name: string | null };
+    expect(after.name).toBe("María");
+  });
+});
+
+describe("markContactOptOut", () => {
+  it("sets opt_out AND clears the name (kept only until opt-out)", () => {
+    const salon = makeSalon();
+    const c = upsertContact(db, {
+      salon_id: salon.id,
+      phone: "+5255100001",
+      name: "Ana",
+    });
+    markContactOptOut(db, c.id);
+    const after = db
+      .prepare("SELECT name, opt_out FROM contacts WHERE id = ?")
+      .get(c.id) as { name: string | null; opt_out: number };
+    expect(after.opt_out).toBe(1);
+    expect(after.name).toBeNull();
   });
 });
 

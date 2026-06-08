@@ -10,6 +10,7 @@ import type Database from "better-sqlite3";
 import { parseIntent } from "./intent-parser.js";
 import { conversationState } from "./conversation-state.js";
 import { Messages } from "./messages.js";
+import { extractFirstName } from "./name-extract.js";
 import {
   upsertContact,
   getServices,
@@ -19,6 +20,7 @@ import {
   getNextAppointmentForContact,
   getAppointmentById,
   markContactOptOut,
+  setContactName,
   markCampaignResponded,
   markCampaignBooked,
 } from "../db/models.js";
@@ -28,7 +30,7 @@ import {
   checkCustomTime,
 } from "./slot-finder.js";
 import { parseSpanishDateTime } from "./datetime-parser.js";
-import type { Service } from "../db/models.js";
+import type { Contact, Service } from "../db/models.js";
 
 const DEFAULT_SLOT_DURATION_MIN = 60;
 
@@ -90,6 +92,40 @@ function offerSlotsForService(
   };
 }
 
+/**
+ * Close out a freshly-confirmed booking. When we don't yet know the clienta's
+ * name, ask for it ONCE — append the ask to the confirmation and park her in
+ * `awaiting_client_name`. When we already have it, the confirmation text has
+ * already greeted her by name, so just clear the flow. The name then rides on
+ * every future reminder/confirmation and is never asked for again (it lives in
+ * the DB until she opts out).
+ */
+function withNamePrompt(
+  salon_id: string,
+  fromPhone: string,
+  contact: Contact,
+  confirmationReply: string,
+): HandleResult {
+  if (!contact.name || contact.name.trim() === "") {
+    // INVARIANT: this state must NOT carry campaign_id (nor any pending_*). The
+    // awaiting_client_name fall-through in handleInboundMessage leaves this
+    // object in scope when she issues a command; a campaign_id here would be
+    // re-read by the BOOK handler and could double-process a reactivation.
+    conversationState.set(
+      {
+        step: "awaiting_client_name",
+        salon_id,
+        contact_id: contact.id,
+        updated_at: Date.now(),
+      },
+      fromPhone,
+    );
+    return { reply: `${confirmationReply}\n\n${Messages.askClientName()}` };
+  }
+  conversationState.clear(salon_id, fromPhone);
+  return { reply: confirmationReply };
+}
+
 export interface HandleResult {
   reply: string | null; // null = no reply needed
 }
@@ -105,7 +141,7 @@ export async function handleInboundMessage(
   // Skip opted-out contacts
   if (contact.opt_out) return { reply: null };
 
-  // Get current conversation state
+  // Get current conversation state.
   const state = conversationState.get(salon_id, fromPhone);
   const context =
     state?.step === "reactivation_sent" ? "reactivation" : undefined;
@@ -221,8 +257,12 @@ export async function handleInboundMessage(
         markCampaignBooked(db, state.campaign_id);
       }
 
-      conversationState.clear(salon_id, fromPhone);
-      return { reply: Messages.appointmentConfirmed(appt, service) };
+      return withNamePrompt(
+        salon_id,
+        fromPhone,
+        contact,
+        Messages.appointmentConfirmed(appt, service, contact),
+      );
     } else if (slotNumber === customOptionNumber) {
       conversationState.set(
         {
@@ -326,14 +366,17 @@ export async function handleInboundMessage(
         throw e;
       }
 
-      conversationState.clear(salon_id, fromPhone);
-      return {
-        reply: Messages.appointmentRescheduled(
+      return withNamePrompt(
+        salon_id,
+        fromPhone,
+        contact,
+        Messages.appointmentRescheduled(
           appt,
           old?.starts_at ?? null,
           service,
+          contact,
         ),
-      };
+      );
     } else if (slotNumber === customOptionNumber && oldId) {
       conversationState.set(
         {
@@ -543,14 +586,17 @@ export async function handleInboundMessage(
         });
       });
       const appt = tx();
-      conversationState.clear(salon_id, fromPhone);
-      return {
-        reply: Messages.appointmentRescheduled(
+      return withNamePrompt(
+        salon_id,
+        fromPhone,
+        contact,
+        Messages.appointmentRescheduled(
           appt,
           old?.starts_at ?? null,
           service,
+          contact,
         ),
-      };
+      );
     }
 
     // BOOK mode
@@ -564,8 +610,12 @@ export async function handleInboundMessage(
     if (state.campaign_id) {
       markCampaignBooked(db, state.campaign_id);
     }
-    conversationState.clear(salon_id, fromPhone);
-    return { reply: Messages.appointmentConfirmed(appt, service) };
+    return withNamePrompt(
+      salon_id,
+      fromPhone,
+      contact,
+      Messages.appointmentConfirmed(appt, service, contact),
+    );
   }
 
   // ─── Reactivation yes/no ──────────────────────────────────────────────
@@ -579,6 +629,36 @@ export async function handleInboundMessage(
       conversationState.clear(salon_id, fromPhone);
       return { reply: Messages.reactivationNo() };
     }
+  }
+
+  // ─── Awaiting client name (asked once, right after a confirmation) ─────
+  // She was parked here after confirming a cita and being asked her name.
+  // Capture a usable first name and store it. She can step out by issuing a
+  // real command (opt-out is already handled above); otherwise we acknowledge
+  // once and move on — we never re-ask, so a decline costs her nothing.
+  if (state?.step === "awaiting_client_name") {
+    const isCommand =
+      intent.type === "book" ||
+      intent.type === "reschedule" ||
+      intent.type === "cancel" ||
+      intent.type === "query_appointment";
+    if (!isCommand) {
+      conversationState.clear(salon_id, fromPhone);
+      const name = extractFirstName(text);
+      if (name) {
+        setContactName(db, contact.id, name);
+        return { reply: Messages.nameThanks(name) };
+      }
+      // Declined / "sí" / "gracias" / gibberish — don't store a bad name, and
+      // don't nag. Just close out warmly.
+      return { reply: Messages.nameSkipped() };
+    }
+    // A real command — abandon the name prompt and fall through to handle it.
+    // Safe to fall through with the now-stale `state`: the only downstream reads
+    // are `state?.campaign_id` (BOOK) and `state?.step === "awaiting_service"`,
+    // and the awaiting_client_name state set by withNamePrompt() carries NEITHER
+    // a campaign_id nor that step. That invariant is pinned in withNamePrompt.
+    conversationState.clear(salon_id, fromPhone);
   }
 
   // ─── Cancel ───────────────────────────────────────────────────────────

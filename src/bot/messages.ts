@@ -46,10 +46,15 @@ export const Messages = {
     return `${preamble}\n${list}\n${customOpt}\n\nResponde con el número ✅`;
   },
 
-  appointmentConfirmed(appt: Appointment, service?: Service): string {
+  appointmentConfirmed(
+    appt: Appointment,
+    service?: Service,
+    contact?: Contact,
+  ): string {
+    const hi = contact?.name ? `, ${contact.name}` : "";
     const when = formatDatetime(appt.starts_at);
     const svc = service ? ` para ${service.name}` : "";
-    return `✅ ¡Listo! Tu cita es el ${when}${svc}.\nTe recordaré 24h antes. ¡Hasta entonces! 💇‍♀️`;
+    return `✅ ¡Listo${hi}! Tu cita es el ${when}${svc}.\nTe recordaré 24h antes. ¡Hasta entonces! 💇‍♀️`;
   },
 
   // ─── Reminder / anti-cancel ────────────────────────────────────────────────
@@ -70,6 +75,24 @@ export const Messages = {
   // ─── Confirmation response ─────────────────────────────────────────────────
   appointmentConfirmedByClient(): string {
     return "Perfecto, ahí te esperamos 💕";
+  },
+
+  // ─── Name capture (asked once, right after a fresh confirmation) ────────────
+  // Only sent when we don't yet have the clienta's name. Once she answers we
+  // greet her by name on every reminder/confirmation and never ask again.
+  askClientName(): string {
+    return "Por cierto, ¿cómo te llamas? Así te atiendo mejor 😊";
+  },
+
+  // Warm acknowledgement once she shares her name.
+  nameThanks(name: string): string {
+    return `¡Mucho gusto, ${name}! 💕 Aquí estaré para lo que necesites.`;
+  },
+
+  // She didn't give a usable name (declined, sent a "sí/gracias", or gibberish).
+  // Acknowledge once and move on — we never re-ask.
+  nameSkipped(): string {
+    return "¡Listo! Cualquier cosa que necesites, aquí estoy 😊";
   },
 
   // ─── Cancel flow ──────────────────────────────────────────────────────────
@@ -107,7 +130,9 @@ export const Messages = {
     newAppt: Appointment,
     oldStartsAt: number | null,
     service?: Service,
+    contact?: Contact,
   ): string {
+    const hi = contact?.name ? `, ${contact.name}` : "";
     const newWhen = formatDatetime(newAppt.starts_at);
     const svc = service ? ` (${service.name})` : "";
     // Audit W2: skip the dated "anterior (...)" clause when the old appt
@@ -116,7 +141,7 @@ export const Messages = {
     const oldClause = oldStartsAt
       ? `\nLa anterior (${formatDatetime(oldStartsAt)}) queda cancelada.`
       : "\nLa anterior queda cancelada.";
-    return `✅ Listo! Tu cita${svc} quedó el ${newWhen}.${oldClause} Te recordaré 24h antes 💇‍♀️`;
+    return `✅ ¡Listo${hi}! Tu cita${svc} quedó el ${newWhen}.${oldClause} Te recordaré 24h antes 💇‍♀️`;
   },
 
   // ─── Query ────────────────────────────────────────────────────────────────

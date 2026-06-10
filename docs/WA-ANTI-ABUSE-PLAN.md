@@ -82,7 +82,10 @@ the 1 active salon (`525640501088` "Salón Demo"); logs confirm `[humanize] ON` 
 `[presence] cycling ON` + `connected ✅`, `/health` 200. Revert = set the flag
 `false` + restart. **Live functional smoke PASSED 2026-06-10** (operator sent a
 real inbound; reply path OK, zero server-side errors). §1.1 fully verified
-end-to-end.
+end-to-end. After a reply-timing retune to a random 1–2s (`c57e3dd`, deployed
+MainPID 609391), **§1.1 is CLOSED** — humanize replies + presence cycling live.
+The presence gap-duration NIT is consciously deferred (optional polish, not part
+of §1.1 closure). Next: §1.2 outbound rate limits.
 
 **As-built (2026-06-10) — ✅ shipped, flag-gated.** New module
 `src/bot/humanize.ts` wired into the reply path in `src/bot/baileys-manager.ts`

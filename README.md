@@ -271,7 +271,21 @@ SALON_DISCONNECT_ALERT_HOURS=24  # Umbral "salón caído" para disconnect-watch 
 BAILEYS_WATCHDOG_ENABLED=true        # Kill switch (default on; "false" lo apaga)
 BAILEYS_RECONNECT_STUCK_MINUTES=5    # Min no-conectado antes de forzar reconexión (default 5)
 BAILEYS_RECONNECT_MAX_STRIKES=5      # Reintentos antes de rendirse por salón (default 5, regla 3-strike)
+# Humanización de respuestas (anti-ban §1.1 — "el bot actúa humano"; default OFF):
+HUMANIZE_ENABLED=false               # Master switch. "true"/"1" lo activa. Default OFF = envío instantáneo, sin cambio.
+HUMANIZE_READ_RECEIPTS=true          # Marca leído (palomitas azules) con jitter. Visible a la clienta; "false" lo desactiva.
+HUMANIZE_READ_MIN_MS=1000            # Piso del jitter de read-receipt (default 1000)
+HUMANIZE_READ_MAX_MS=8000            # Techo del jitter de read-receipt (default 8000)
+HUMANIZE_TYPE_MIN_MS=800             # Piso de la ventana "escribiendo…" (default 800)
+HUMANIZE_TYPE_MAX_MS=2500            # Techo base de la ventana "escribiendo…" (default 2500)
+HUMANIZE_TYPE_PER_CHAR_MS=35         # ms extra por carácter de la respuesta (default 35)
+HUMANIZE_TYPE_CAP_MS=6000            # Tope duro de la ventana de tipeo (default 6000; súbelo para variar respuestas largas)
 ```
+
+> Plan completo de anti-abuso por fases (humanización, proxies residenciales,
+> aislamiento de procesos, multi-región): `WA-ANTI-ABUSE-PLAN.md` en el KB
+> (`negocios-auto-gestionados/verticales/salones-belleza/`). §1.1 (humanización)
+> ya está implementada, **inerte hasta que el operador active `HUMANIZE_ENABLED`**.
 
 ---
 
@@ -291,13 +305,13 @@ ROI para la dueña:         5x-10x en valor recuperado vs precio
 
 ## Riesgos y mitigaciones
 
-| Riesgo                                              | Mitigación                                                                                       |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| WhatsApp banea número                               | Delays aleatorios (2-5s), número secundario para dev, rate limit 20 msgs/h                       |
-| WhatsApp rechaza vínculo desde VPS (data-center IP) | **Pairing code** preferido sobre QR — ver "Vincular número WA" abajo. QR funciona como fallback. |
-| Dueña no sabe escanear QR ni código                 | Pairing code = 8 dígitos, copia-pega en WA. Video tutorial 60s.                                  |
-| Clienta molesta por outbound                        | Solo contactar con historial real, máx 1x/mes por contacto, opt-out inmediato                    |
-| Pérdida de sesión WA                                | Auto-reconexión en `baileys-manager.ts` (3 intentos), log de desconexión                         |
+| Riesgo                                              | Mitigación                                                                                                                                                                                              |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| WhatsApp banea número                               | Delays aleatorios (2-5s), número secundario para dev, rate limit 20 msgs/h. **Humanización §1.1** (flag `HUMANIZE_ENABLED`): "escribiendo…" + read-receipts con jitter para no parecer bot instantáneo. |
+| WhatsApp rechaza vínculo desde VPS (data-center IP) | **Pairing code** preferido sobre QR — ver "Vincular número WA" abajo. QR funciona como fallback.                                                                                                        |
+| Dueña no sabe escanear QR ni código                 | Pairing code = 8 dígitos, copia-pega en WA. Video tutorial 60s.                                                                                                                                         |
+| Clienta molesta por outbound                        | Solo contactar con historial real, máx 1x/mes por contacto, opt-out inmediato                                                                                                                           |
+| Pérdida de sesión WA                                | Auto-reconexión en `baileys-manager.ts` (3 intentos), log de desconexión                                                                                                                                |
 
 ---
 

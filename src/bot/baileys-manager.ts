@@ -96,6 +96,15 @@ export async function initBaileysForSalon(
   // when HUMANIZE_ENABLED is unset (default), so this is a no-op until the
   // operator flips the flag and restarts the service.
   const humanize = loadHumanizeConfig();
+  // Log only when ON, so the default-off path stays silent (no behavior change)
+  // and the operator gets positive confirmation the flag parsed during smoke —
+  // catches a typo'd HUMANIZE_ENABLED (e.g. "TRUE"/"yes") that fails safe to off.
+  if (humanize.enabled) {
+    console.log(
+      `[humanize] [${salonPhone}] ON — read ${humanize.readReceipts ? `${humanize.readMinMs}-${humanize.readMaxMs}ms` : "off"}, ` +
+        `type ${humanize.typeMinMs}-${humanize.typeMaxMs}ms +${humanize.typePerCharMs}/char cap ${humanize.typeCapMs}ms`,
+    );
+  }
 
   if (isTest) {
     const instance = createStubInstance(salonId, salonPhone);

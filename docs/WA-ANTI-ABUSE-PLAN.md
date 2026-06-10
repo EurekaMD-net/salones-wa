@@ -87,13 +87,20 @@ end-to-end.
 **As-built (2026-06-10) — ✅ shipped, flag-gated.** New module
 `src/bot/humanize.ts` wired into the reply path in `src/bot/baileys-manager.ts`
 (the `messages.upsert` handler). Implements: jittered read receipt (fire-and-
-forget, never delays the reply), `composing` typing indicator for a length-
-scaled window → `paused` → send (the typing window _is_ the response delay).
+forget, never delays the reply), `composing` typing indicator for a randomized
+window → `paused` → send (the typing window _is_ the response delay).
 Presence is best-effort — a Baileys presence/read failure can never drop the
-real reply. 16 unit tests on jitter bounds + orchestration; full suite 436/436
+real reply. 17 unit tests on jitter bounds + orchestration; full suite 449/449
 green. The double-book "typing-time window" race (message-handler.ts Audit C2)
 is unaffected: it is guarded by an in-transaction availability re-check, so the
 added latency only widens an already-handled window.
+
+**Reply-timing retune (2026-06-10, operator-directed):** clienta friction from
+multi-second delays is **not acceptable** — the original "0.8–2.5s + 35ms/char
+capped at 6s, longer-for-longer" model could push a long booking confirmation to
+~6s. Superseded: the reply now lands a **randomized 1–2s** after the inbound,
+**independent of reply length** (`HUMANIZE_TYPE_PER_CHAR_MS` default 0), and the
+read receipt fires at 0.4–1s so the message is marked read just before the reply.
 
 **Presence cycling — ✅ shipped 2026-06-10 (`c24ad8f`), DORMANT.** New module
 `src/bot/presence.ts` + socket-lifecycle wiring in `baileys-manager.ts`:
@@ -117,38 +124,32 @@ are split into multiple messages — they aren't today, so N/A for now).
 `SALONES_ENV=test` also forces it off (suite stays deterministic). Operator
 enables by adding env to salones-wa's systemd `.env` and restarting:
 
-| Env var                       | Default               | Meaning                                                 |
-| ----------------------------- | --------------------- | ------------------------------------------------------- |
-| `HUMANIZE_ENABLED`            | `false`               | Master switch. `true`/`1` to enable.                    |
-| `HUMANIZE_READ_RECEIPTS`      | `true`                | Send jittered blue ticks (visible UX).                  |
-| `HUMANIZE_READ_MIN_MS`        | `1000`                | Read-receipt jitter floor.                              |
-| `HUMANIZE_READ_MAX_MS`        | `8000`                | Read-receipt jitter ceiling.                            |
-| `HUMANIZE_TYPE_MIN_MS`        | `800`                 | Typing-window base floor.                               |
-| `HUMANIZE_TYPE_MAX_MS`        | `2500`                | Typing-window base ceiling.                             |
-| `HUMANIZE_TYPE_PER_CHAR_MS`   | `35`                  | Extra typing ms per reply char.                         |
-| `HUMANIZE_TYPE_CAP_MS`        | `6000`                | Hard ceiling on the typing window.                      |
-| `HUMANIZE_PRESENCE_CYCLING`   | `true`                | Presence-cycling sub-flag (needs master on).            |
-| `HUMANIZE_ONLINE_START_HOUR`  | `9`                   | Local hour the bot goes `available`.                    |
-| `HUMANIZE_ONLINE_END_HOUR`    | `21`                  | Local hour it goes `unavailable`; window `[start,end)`. |
-| `HUMANIZE_PRESENCE_TICK_MS`   | `300000`              | Presence re-evaluation interval (5 min).                |
-| `HUMANIZE_OFFLINE_GAP_CHANCE` | `0.15`                | P(brief offline gap) per in-hours tick.                 |
-| `HUMANIZE_PRESENCE_TZ`        | `America/Mexico_City` | TZ the hours resolve in.                                |
+| Env var                       | Default               | Meaning                                                   |
+| ----------------------------- | --------------------- | --------------------------------------------------------- |
+| `HUMANIZE_ENABLED`            | `false`               | Master switch. `true`/`1` to enable.                      |
+| `HUMANIZE_READ_RECEIPTS`      | `true`                | Send jittered blue ticks (visible UX).                    |
+| `HUMANIZE_READ_MIN_MS`        | `400`                 | Read-receipt jitter floor.                                |
+| `HUMANIZE_READ_MAX_MS`        | `1000`                | Read-receipt ceiling (≤ reply floor ⇒ read before reply). |
+| `HUMANIZE_TYPE_MIN_MS`        | `1000`                | Reply delay floor (inbound → reply).                      |
+| `HUMANIZE_TYPE_MAX_MS`        | `2000`                | Reply delay ceiling — reply lands a random 1–2s.          |
+| `HUMANIZE_TYPE_PER_CHAR_MS`   | `0`                   | Per-char term (default 0 = length-independent timing).    |
+| `HUMANIZE_TYPE_CAP_MS`        | `2000`                | Hard ceiling on the typing window.                        |
+| `HUMANIZE_PRESENCE_CYCLING`   | `true`                | Presence-cycling sub-flag (needs master on).              |
+| `HUMANIZE_ONLINE_START_HOUR`  | `9`                   | Local hour the bot goes `available`.                      |
+| `HUMANIZE_ONLINE_END_HOUR`    | `21`                  | Local hour it goes `unavailable`; window `[start,end)`.   |
+| `HUMANIZE_PRESENCE_TICK_MS`   | `300000`              | Presence re-evaluation interval (5 min).                  |
+| `HUMANIZE_OFFLINE_GAP_CHANCE` | `0.15`                | P(brief offline gap) per in-hours tick.                   |
+| `HUMANIZE_PRESENCE_TZ`        | `America/Mexico_City` | TZ the hours resolve in.                                  |
 
 **Operator smoke (before broad enable):** set `HUMANIZE_ENABLED=true` for one
 test salon (or a staging number), restart, send a few inbounds, and confirm:
-(1) the "escribiendo…" indicator shows then the reply lands ~1–3s later;
-(2) blue ticks appear a few seconds after delivery, not instantly;
+(1) the "escribiendo…" indicator shows then the reply lands a snappy **1–2s**
+later (same speed for a long booking confirmation as a short "sí");
+(2) blue ticks appear ~0.4–1s after delivery (just before the reply), not instantly;
 (3) a full booking confirmation flow ("¿Confirmas?" → "Sí") still completes — no
 state-machine timeout breakage. Heads-up: the typing indicator **and** blue
 ticks are visible to real clientas; set `HUMANIZE_READ_RECEIPTS=false` to keep
 read receipts off if the salon prefers no blue ticks.
-
-_Tuning note (QA, minor):_ with the defaults, the per-char term saturates the
-`HUMANIZE_TYPE_CAP_MS=6000` ceiling at ~100–150 chars, so most booking replies
-land at a near-constant ~6s typing window (the "longer = slower" variance
-flattens out). If you want that variance preserved for long replies, raise
-`HUMANIZE_TYPE_CAP_MS` (e.g. 9000–12000) during the smoke and watch that replies
-don't feel sluggish.
 
 ### 1.2 Outbound rate limits
 

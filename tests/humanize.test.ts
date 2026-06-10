@@ -31,12 +31,28 @@ describe("loadHumanizeConfig", () => {
     const c = loadHumanizeConfig({});
     expect(c.enabled).toBe(false);
     expect(c.readReceipts).toBe(true);
-    expect(c.readMinMs).toBe(1000);
-    expect(c.readMaxMs).toBe(8000);
-    expect(c.typeMinMs).toBe(800);
-    expect(c.typeMaxMs).toBe(2500);
-    expect(c.typePerCharMs).toBe(35);
-    expect(c.typeCapMs).toBe(6000);
+    expect(c.readMinMs).toBe(400);
+    expect(c.readMaxMs).toBe(1000);
+    expect(c.typeMinMs).toBe(1000);
+    expect(c.typeMaxMs).toBe(2000);
+    expect(c.typePerCharMs).toBe(0); // length-independent reply timing
+    expect(c.typeCapMs).toBe(2000);
+  });
+
+  it("default reply window is a snappy 1-2s, INDEPENDENT of reply length", () => {
+    const c = loadHumanizeConfig({ HUMANIZE_ENABLED: "true" });
+    // floor / ceiling of the randomized window
+    expect(typingDelayMs(0, c, () => 0)).toBe(1000);
+    expect(typingDelayMs(0, c, () => 0.999999)).toBe(2000);
+    // a long booking confirmation answers just as fast as a short "sí"
+    expect(typingDelayMs(500, c, () => 0)).toBe(1000);
+    expect(typingDelayMs(500, c, () => 0.5)).toBe(
+      typingDelayMs(5, c, () => 0.5),
+    );
+    // read receipt always lands at/under the reply floor → marked read first
+    expect(readReceiptDelayMs(c, () => 0.999999)).toBeLessThanOrEqual(
+      typingDelayMs(0, c, () => 0),
+    );
   });
 
   it("enables when HUMANIZE_ENABLED=true", () => {
@@ -61,7 +77,7 @@ describe("loadHumanizeConfig", () => {
     });
     expect(c.readMinMs).toBe(500);
     expect(c.typeCapMs).toBe(9000);
-    expect(c.typePerCharMs).toBe(35); // garbage → default
+    expect(c.typePerCharMs).toBe(0); // garbage → default (length-independent)
     expect(c.readReceipts).toBe(false);
   });
 });

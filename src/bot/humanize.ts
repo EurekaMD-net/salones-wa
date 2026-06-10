@@ -5,11 +5,13 @@
  * with no typing indicator is a textbook automation fingerprint. This module
  * makes each reply look human-paced:
  *
- *   - jittered READ RECEIPT — mark the clienta's message read 1–8s later, not
- *     instantly (fire-and-forget so it never delays the reply itself)
- *   - TYPING indicator (`composing`) shown for a length-scaled window, then
- *     `paused` just before the send — the window doubles as the response delay
- *     (no instant robotic reply)
+ *   - jittered READ RECEIPT — mark the clienta's message read after a short
+ *     0.4–1s jitter (fire-and-forget so it never delays the reply), always just
+ *     before the reply lands
+ *   - TYPING indicator (`composing`) shown for a randomized window, then
+ *     `paused` just before the send — the window IS the response delay, so the
+ *     reply lands a human-but-snappy 1–2s after the inbound (no instant robotic
+ *     reply, but no friction either; the delay is length-INDEPENDENT by default)
  *
  * Master switch: HUMANIZE_ENABLED (default OFF). Disabled — or SALONES_ENV=test —
  * means zero added latency and an immediate send, so existing behavior and the
@@ -44,9 +46,12 @@ const bool = (v: string | undefined, def: boolean): boolean =>
   v === undefined ? def : v === "true" || v === "1";
 
 /**
- * Build config from the process environment. Defaults match plan §1.1
- * (read 1–8s, type 0.8–2.5s + 35ms/char capped at 6s). Forced OFF under
- * SALONES_ENV=test so the suite stays instant and deterministic.
+ * Build config from the process environment. Defaults target a snappy,
+ * low-friction reply: read receipt at 0.4–1s, reply at a randomized 1–2s
+ * (length-INDEPENDENT — per-char term defaults to 0, so a long booking
+ * confirmation answers as fast as a short "sí"). Read window (max 1000) ≤ reply
+ * window (min 1000) ⇒ the message is always marked read at or before the reply.
+ * Forced OFF under SALONES_ENV=test so the suite stays instant and deterministic.
  */
 export function loadHumanizeConfig(
   env: NodeJS.ProcessEnv = process.env,
@@ -55,12 +60,12 @@ export function loadHumanizeConfig(
   return {
     enabled: !isTest && bool(env["HUMANIZE_ENABLED"], false),
     readReceipts: bool(env["HUMANIZE_READ_RECEIPTS"], true),
-    readMinMs: num(env["HUMANIZE_READ_MIN_MS"], 1000),
-    readMaxMs: num(env["HUMANIZE_READ_MAX_MS"], 8000),
-    typeMinMs: num(env["HUMANIZE_TYPE_MIN_MS"], 800),
-    typeMaxMs: num(env["HUMANIZE_TYPE_MAX_MS"], 2500),
-    typePerCharMs: num(env["HUMANIZE_TYPE_PER_CHAR_MS"], 35),
-    typeCapMs: num(env["HUMANIZE_TYPE_CAP_MS"], 6000),
+    readMinMs: num(env["HUMANIZE_READ_MIN_MS"], 400),
+    readMaxMs: num(env["HUMANIZE_READ_MAX_MS"], 1000),
+    typeMinMs: num(env["HUMANIZE_TYPE_MIN_MS"], 1000),
+    typeMaxMs: num(env["HUMANIZE_TYPE_MAX_MS"], 2000),
+    typePerCharMs: num(env["HUMANIZE_TYPE_PER_CHAR_MS"], 0),
+    typeCapMs: num(env["HUMANIZE_TYPE_CAP_MS"], 2000),
   };
 }
 

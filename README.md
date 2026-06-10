@@ -274,12 +274,12 @@ BAILEYS_RECONNECT_MAX_STRIKES=5      # Reintentos antes de rendirse por salón (
 # Humanización de respuestas (anti-ban §1.1 — "el bot actúa humano"; default OFF):
 HUMANIZE_ENABLED=false               # Master switch. "true"/"1" lo activa. Default OFF = envío instantáneo, sin cambio.
 HUMANIZE_READ_RECEIPTS=true          # Marca leído (palomitas azules) con jitter. Visible a la clienta; "false" lo desactiva.
-HUMANIZE_READ_MIN_MS=1000            # Piso del jitter de read-receipt (default 1000)
-HUMANIZE_READ_MAX_MS=8000            # Techo del jitter de read-receipt (default 8000)
-HUMANIZE_TYPE_MIN_MS=800             # Piso de la ventana "escribiendo…" (default 800)
-HUMANIZE_TYPE_MAX_MS=2500            # Techo base de la ventana "escribiendo…" (default 2500)
-HUMANIZE_TYPE_PER_CHAR_MS=35         # ms extra por carácter de la respuesta (default 35)
-HUMANIZE_TYPE_CAP_MS=6000            # Tope duro de la ventana de tipeo (default 6000; súbelo para variar respuestas largas)
+HUMANIZE_READ_MIN_MS=400             # Piso del jitter de read-receipt (default 400)
+HUMANIZE_READ_MAX_MS=1000            # Techo del read-receipt (default 1000; ≤ piso de respuesta ⇒ marca leído antes de responder)
+HUMANIZE_TYPE_MIN_MS=1000            # Piso de la respuesta "escribiendo…" → envío (default 1000)
+HUMANIZE_TYPE_MAX_MS=2000            # Techo de la respuesta (default 2000). Respuesta = aleatoria 1-2s tras el mensaje
+HUMANIZE_TYPE_PER_CHAR_MS=0          # ms extra por carácter (default 0 = independiente del largo; respuestas largas igual de rápidas)
+HUMANIZE_TYPE_CAP_MS=2000            # Tope duro de la ventana de tipeo (default 2000)
 # Presencia (anti-ban §1.1 — "no estar 'en línea' 24/7"; comparte HUMANIZE_ENABLED):
 HUMANIZE_PRESENCE_CYCLING=true       # Sub-flag (default on cuando HUMANIZE_ENABLED=true). "false" lo desactiva.
 HUMANIZE_ONLINE_START_HOUR=9         # Hora local en que el bot se pone "disponible" (default 9)

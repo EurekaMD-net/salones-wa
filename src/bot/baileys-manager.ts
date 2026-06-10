@@ -17,6 +17,13 @@ import {
   humanizedSend,
   humanizedReadReceipt,
 } from "./humanize.js";
+import {
+  loadPresenceConfig,
+  decidePresence,
+  hourInTz,
+  type Presence,
+  type PresenceConfig,
+} from "./presence.js";
 
 export interface BaileysInstance {
   salonId: string;
@@ -55,6 +62,53 @@ const instances = new Map<string, BaileysInstance>();
 // no-op — preventing a zombie's late "close" from deleting the live instance
 // (also closes the pre-existing reconnect race, not just the watchdog path).
 const socketGenerations = new Map<string, number>();
+
+// §1.1 presence cycling: one re-evaluation timer per salon. Started on `open`,
+// stopped at every teardown seam; each tick is also generation-fenced so a
+// zombie socket's timer self-clears even if a stop is somehow missed.
+const presenceTimers = new Map<string, ReturnType<typeof setInterval>>();
+
+/** Stop and forget a salon's presence-cycling timer. Idempotent. */
+function stopPresenceCycle(salonId: string): void {
+  const handle = presenceTimers.get(salonId);
+  if (handle !== undefined) {
+    clearInterval(handle);
+    presenceTimers.delete(salonId);
+  }
+}
+
+/**
+ * Start the presence-cycling timer for a freshly-connected salon: set the
+ * desired global presence immediately, then re-evaluate every `cfg.tickMs`.
+ * No-op when disabled. `setPresence` is the caller's real sock closure; presence
+ * is best-effort, so a Baileys failure is swallowed (never escalates). `isCurrent`
+ * is the socket's generation fence — a superseded socket's tick self-clears.
+ */
+function startPresenceCycle(
+  salonId: string,
+  setPresence: (type: Presence) => Promise<void>,
+  cfg: PresenceConfig,
+  isCurrent: () => boolean,
+): void {
+  stopPresenceCycle(salonId); // never stack two timers on one salon
+  if (!cfg.enabled) return;
+  const tick = async (): Promise<void> => {
+    if (!isCurrent()) {
+      stopPresenceCycle(salonId);
+      return;
+    }
+    const want = decidePresence(hourInTz(new Date(), cfg.timeZone), cfg);
+    try {
+      await setPresence(want);
+    } catch {
+      /* presence is decorative — a failure must never escalate */
+    }
+  };
+  void tick(); // set initial presence on connect, don't wait a full interval
+  const handle = setInterval(() => void tick(), cfg.tickMs);
+  handle.unref?.(); // a cosmetic timer must not keep the process alive
+  presenceTimers.set(salonId, handle);
+}
 
 /** Stub sendMessage for test environment */
 function createStubInstance(
@@ -96,6 +150,7 @@ export async function initBaileysForSalon(
   // when HUMANIZE_ENABLED is unset (default), so this is a no-op until the
   // operator flips the flag and restarts the service.
   const humanize = loadHumanizeConfig();
+  const presence = loadPresenceConfig();
   // Log only when ON, so the default-off path stays silent (no behavior change)
   // and the operator gets positive confirmation the flag parsed during smoke —
   // catches a typo'd HUMANIZE_ENABLED (e.g. "TRUE"/"yes") that fails safe to off.
@@ -103,6 +158,12 @@ export async function initBaileysForSalon(
     console.log(
       `[humanize] [${salonPhone}] ON — read ${humanize.readReceipts ? `${humanize.readMinMs}-${humanize.readMaxMs}ms` : "off"}, ` +
         `type ${humanize.typeMinMs}-${humanize.typeMaxMs}ms +${humanize.typePerCharMs}/char cap ${humanize.typeCapMs}ms`,
+    );
+  }
+  if (presence.enabled) {
+    console.log(
+      `[presence] [${salonPhone}] cycling ON — online ${presence.startHour}-${presence.endHour}h ${presence.timeZone}, ` +
+        `tick ${Math.round(presence.tickMs / 1000)}s, gap ${Math.round(presence.offlineGapChance * 100)}%`,
     );
   }
 
@@ -156,6 +217,10 @@ export async function initBaileysForSalon(
     // that WA's backend recognizes. Common Baileys community fix when
     // pairing-code linking fails from VPS / data-center IPs.
     browser: Browsers.ubuntu("Chrome"),
+    // §1.1 presence cycling: when ON, don't broadcast `available` the instant we
+    // connect — the cycle timer manages presence per business hours. When OFF,
+    // keep Baileys' default (true) so behavior is unchanged.
+    markOnlineOnConnect: !presence.enabled,
     // Minimize logging noise
     logger: {
       level: "silent",
@@ -237,6 +302,9 @@ export async function initBaileysForSalon(
     }
 
     if (connection === "close") {
+      // §1.1: a closed socket must not keep cycling presence (and a reconnect
+      // re-arms its own timer on the next `open`).
+      stopPresenceCycle(salonId);
       const statusCode = (lastDisconnect?.error as InstanceType<typeof Boom>)
         ?.output?.statusCode;
       const reason = lastDisconnect?.error?.message ?? "unknown";
@@ -270,6 +338,13 @@ export async function initBaileysForSalon(
     if (connection === "open") {
       recordSalonState(salonId, salonPhone, "connected");
       console.log(`[baileys] [${salonPhone}] connected ✅`);
+      // §1.1: begin presence cycling for this (now live) socket. No-op when off.
+      startPresenceCycle(
+        salonId,
+        (type) => sock.sendPresenceUpdate(type),
+        presence,
+        isCurrentGeneration,
+      );
     }
   });
 
@@ -391,6 +466,7 @@ export async function reinitBaileysForSalon(
   salonPhone: string,
 ): Promise<BaileysInstance> {
   instances.delete(salonId);
+  stopPresenceCycle(salonId); // §1.1: drop the stale socket's presence timer
   return initBaileysForSalon(options, salonId, salonPhone);
 }
 
@@ -419,6 +495,7 @@ export async function removeBaileysForSalon(
 ): Promise<void> {
   // Supersede any in-flight/zombie socket so its handlers go inert (qa-C1).
   socketGenerations.set(salonId, (socketGenerations.get(salonId) ?? 0) + 1);
+  stopPresenceCycle(salonId); // §1.1: kill the presence timer for a deleted salon
 
   const instance = instances.get(salonId);
   instances.delete(salonId); // stop sends/receives immediately, pre-logout

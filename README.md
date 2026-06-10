@@ -280,6 +280,13 @@ HUMANIZE_TYPE_MIN_MS=800             # Piso de la ventana "escribiendo…" (defa
 HUMANIZE_TYPE_MAX_MS=2500            # Techo base de la ventana "escribiendo…" (default 2500)
 HUMANIZE_TYPE_PER_CHAR_MS=35         # ms extra por carácter de la respuesta (default 35)
 HUMANIZE_TYPE_CAP_MS=6000            # Tope duro de la ventana de tipeo (default 6000; súbelo para variar respuestas largas)
+# Presencia (anti-ban §1.1 — "no estar 'en línea' 24/7"; comparte HUMANIZE_ENABLED):
+HUMANIZE_PRESENCE_CYCLING=true       # Sub-flag (default on cuando HUMANIZE_ENABLED=true). "false" lo desactiva.
+HUMANIZE_ONLINE_START_HOUR=9         # Hora local en que el bot se pone "disponible" (default 9)
+HUMANIZE_ONLINE_END_HOUR=21          # Hora local en que se pone "no disponible"; ventana [start,end) (default 21)
+HUMANIZE_PRESENCE_TICK_MS=300000     # Cada cuánto re-evalúa la presencia (default 5 min)
+HUMANIZE_OFFLINE_GAP_CHANCE=0.15     # Prob. de "ausentarse" en un tick dentro de horario (default 0.15)
+HUMANIZE_PRESENCE_TZ=America/Mexico_City  # TZ en que se resuelven las horas (default MX)
 ```
 
 > Plan completo de anti-abuso por fases (humanización, proxies residenciales,

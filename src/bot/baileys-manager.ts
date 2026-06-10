@@ -12,6 +12,11 @@ import type Database from "better-sqlite3";
 import { getSalonByPhone, upsertContact } from "../db/models.js";
 import { handleInboundMessage } from "./message-handler.js";
 import { recordSalonState } from "./baileys-state.js";
+import {
+  loadHumanizeConfig,
+  humanizedSend,
+  humanizedReadReceipt,
+} from "./humanize.js";
 
 export interface BaileysInstance {
   salonId: string;
@@ -23,7 +28,9 @@ export interface BaileysInstance {
    * Uses onWhatsApp() — silent, no message sent.
    * Throws if the socket is disconnected or WA returns an error.
    */
-  checkWA: (waNumber: string) => Promise<{ exists: boolean; jid: string | null }>;
+  checkWA: (
+    waNumber: string,
+  ) => Promise<{ exists: boolean; jid: string | null }>;
 }
 
 export interface BaileysManagerOptions {
@@ -84,6 +91,11 @@ export async function initBaileysForSalon(
   if (instances.has(salonId)) return instances.get(salonId)!;
 
   const isTest = process.env["SALONES_ENV"] === "test";
+  // §1.1 behavioral mimicry config. Read once per socket init from the
+  // environment; loadHumanizeConfig forces it OFF under SALONES_ENV=test and
+  // when HUMANIZE_ENABLED is unset (default), so this is a no-op until the
+  // operator flips the flag and restarts the service.
+  const humanize = loadHumanizeConfig();
 
   if (isTest) {
     const instance = createStubInstance(salonId, salonPhone);
@@ -295,8 +307,23 @@ export async function initBaileysForSalon(
           phone,
           text,
         );
+        // §1.1: mark the clienta's message read after a human jitter. Fire-and-
+        // forget (no await) so it never delays the reply; no-op when disabled.
+        void humanizedReadReceipt(() => sock.readMessages([msg.key]), humanize);
         if (result.reply) {
-          await sock.sendMessage(from, { text: result.reply });
+          // Capture into a definite string so the send closure doesn't depend
+          // on the (possibly re-narrowed) result.reply field.
+          const reply = result.reply;
+          // §1.1: show `composing` for a length-scaled window, then send.
+          // When humanize is disabled this is an immediate, unchanged send.
+          await humanizedSend(
+            reply,
+            (type) => sock.sendPresenceUpdate(type, from),
+            async () => {
+              await sock.sendMessage(from, { text: reply });
+            },
+            humanize,
+          );
         }
       } catch (err) {
         const statusCode = (err as InstanceType<typeof Boom>)?.output

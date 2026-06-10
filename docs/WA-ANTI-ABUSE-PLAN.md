@@ -216,6 +216,27 @@ preventive, for onboarding salones 2–5.
 - Add `optout_check` as a hard gate in the send pipeline (not just at intent dispatch).
 - Reply once to opt-out confirmation, then never again. Even "ok te quito" should be the LAST message ever sent.
 
+**As-built (2026-06-10) — ✅ shipped, ACTIVE (not flag-gated — compliance).**
+The opt-out store is the `contacts.opt_out` column (the plan's
+`salon_clienta_optouts` table never existed — trust the code). End-to-end audit
+found the path mostly solid: detect (`intent-parser` `OPT_OUT_PATTERNS` →
+`opt_out` intent) → record (`markContactOptOut` sets `opt_out=1, name=NULL`) →
+reply path goes **silent** for an opted-out inbound (`message-handler.ts:142` →
+`reply:null`) and sends exactly **one** confirmation (`:152` → `optOutConfirmed()`)
+→ reminders skip per-iteration → `getDormantContacts` filters `opt_out=0`.
+
+**Gap closed:** the **reactivation** cron queried dormant contacts once then sent
+over minutes with no per-send re-check — a clienta who said BAJA mid-run still
+got messaged. Fix: a **send-time opt-out hard gate** (`isContactOptedOut`) as the
+FIRST check in `gateUnsolicited`, ABOVE the rate-limit flag — so it's enforced on
+every unsolicited send even when §1.2 rate limiting is OFF. An opt-out drop
+records `salones_wa_outbound_dropped_total{reason="opt_out"}`, never sends, never
+counts, and (send-before-record) never marks the reminder / creates the campaign.
+The reactive reply + the one-time confirmation are NOT on this chokepoint, so
+they're untouched. Indexed via `UNIQUE(salon_id, phone)`. 4 unit tests (+ existing
+message-handler opt-out coverage); suite 473/473; **qa-auditor SHIP**. _Also
+cleaned a stray NUL byte in the §1.2 drop-counter key (now `JSON.stringify`)._
+
 ### 1.4 Onboarding policy: "WA must be aged"
 
 **Owner:** Operator (product policy) · **Effort:** Documentation · **Cost:** $0

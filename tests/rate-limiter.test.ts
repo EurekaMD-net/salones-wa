@@ -24,6 +24,7 @@ import {
   resetDrops,
   type RateLimitConfig,
 } from "../src/bot/rate-limiter.js";
+import { isContactOptedOut } from "../src/db/models.js";
 
 const cfg = (over: Partial<RateLimitConfig> = {}): RateLimitConfig => ({
   enabled: true,
@@ -232,6 +233,77 @@ describe("pruneOldCounters", () => {
     expect(pruned).toBeGreaterThanOrEqual(2); // counter + salon_daily rows for 06-01
     expect(pairCount(db, "s1", "p1", "2026-06-01")).toBe(0);
     expect(pairCount(db, "s1", "p1", "2026-06-10")).toBe(1);
+  });
+});
+
+describe("§1.3 opt-out hard gate", () => {
+  const seedContact = (phone: string, optOut: number) =>
+    db
+      .prepare(
+        "INSERT INTO contacts (id, salon_id, phone, opt_out) VALUES (?, 's1', ?, ?)",
+      )
+      .run("c-" + phone, phone, optOut);
+
+  const key = (phone: string) => ({
+    salonId: "s1",
+    clientaPhone: phone,
+    kind: "reactivation" as const,
+    timeZone: "America/Mexico_City",
+    now: new Date("2026-06-10T18:00:00Z"),
+  });
+
+  it("isContactOptedOut reflects the row (unknown ⇒ false)", () => {
+    seedContact("pOut", 1);
+    seedContact("pIn", 0);
+    expect(isContactOptedOut(db, "s1", "pOut")).toBe(true);
+    expect(isContactOptedOut(db, "s1", "pIn")).toBe(false);
+    expect(isContactOptedOut(db, "s1", "pUnknown")).toBe(false);
+  });
+
+  it("drops an opted-out contact WITHOUT sending — even when rate limiting is OFF", async () => {
+    seedContact("pOut", 1);
+    let sends = 0;
+    const reasons: string[] = [];
+    const ok = await gateUnsolicited(
+      db,
+      cfg({ enabled: false }), // §1.2 off, but §1.3 still enforces
+      key("pOut"),
+      async () => void sends++,
+      (r) => reasons.push(r),
+    );
+    expect(ok).toBe(false);
+    expect(sends).toBe(0);
+    expect(reasons).toEqual(["opt_out"]);
+    expect(snapshotDrops()[0]).toMatchObject({ reason: "opt_out" });
+  });
+
+  it("opt-out takes precedence over the caps (under-cap but opted out ⇒ dropped)", async () => {
+    seedContact("pOut", 1);
+    let sends = 0;
+    const ok = await gateUnsolicited(
+      db,
+      cfg(), // enabled, well under caps
+      key("pOut"),
+      async () => void sends++,
+    );
+    expect(ok).toBe(false);
+    expect(sends).toBe(0);
+    // never recorded toward the counters
+    expect(pairCount(db, "s1", "pOut", "2026-06-10")).toBe(0);
+    expect(salonDayTotal(db, "s1", "2026-06-10")).toBe(0);
+  });
+
+  it("a non-opted-out contact still sends", async () => {
+    seedContact("pIn", 0);
+    let sends = 0;
+    const ok = await gateUnsolicited(
+      db,
+      cfg({ enabled: false }),
+      key("pIn"),
+      async () => void sends++,
+    );
+    expect(ok).toBe(true);
+    expect(sends).toBe(1);
   });
 });
 

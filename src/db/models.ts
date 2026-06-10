@@ -441,6 +441,23 @@ export function setContactName(
   db.prepare("UPDATE contacts SET name = ? WHERE id = ?").run(name, contact_id);
 }
 
+/**
+ * §1.3 opt-out hard gate: is (salon, phone) opted out RIGHT NOW? A send-time
+ * re-check for the unsolicited send chokepoint — catches a clienta who opted
+ * out AFTER a cron's batch query (the reactivation race, where sends span
+ * minutes). Unknown contact ⇒ not opted out. Indexed by UNIQUE(salon_id, phone).
+ */
+export function isContactOptedOut(
+  db: Database.Database,
+  salon_id: string,
+  phone: string,
+): boolean {
+  const row = db
+    .prepare("SELECT opt_out FROM contacts WHERE salon_id = ? AND phone = ?")
+    .get(salon_id, phone) as { opt_out: number } | undefined;
+  return row?.opt_out === 1;
+}
+
 export function markContactOptOut(
   db: Database.Database,
   contact_id: string,

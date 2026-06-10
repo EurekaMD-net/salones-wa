@@ -28,6 +28,7 @@ import {
   type SalonHealth,
 } from "../bot/baileys-state.js";
 import { clientIp, createRateLimiter, verifyAdminTokenQuery } from "./auth.js";
+import { snapshotDrops } from "../bot/rate-limiter.js";
 
 /** Snapshot the health of every ACTIVE salon (joins DB roster + live registry). */
 export function computeSalonHealths(
@@ -120,6 +121,25 @@ export function renderMetrics(healths: SalonHealth[]): string {
   return lines.join("\n") + "\n";
 }
 
+/**
+ * Render the in-memory outbound-drop counter (§1.2 rate limiter) as Prometheus
+ * text. Zero series while the limiter is dormant — just the HELP/TYPE header.
+ */
+export function renderOutboundDropMetrics(
+  drops: ReturnType<typeof snapshotDrops>,
+): string {
+  const lines: string[] = [
+    "# HELP salones_wa_outbound_dropped_total Unsolicited messages dropped by the rate limiter (§1.2).",
+    "# TYPE salones_wa_outbound_dropped_total counter",
+  ];
+  for (const d of drops) {
+    lines.push(
+      `salones_wa_outbound_dropped_total{salon_id="${escapeLabel(d.salonId)}",kind="${escapeLabel(d.kind)}",reason="${escapeLabel(d.reason)}"} ${d.count}`,
+    );
+  }
+  return lines.join("\n") + "\n";
+}
+
 /** Routes mounted at the app root alongside panel + admin. */
 export function createObservabilityRoutes(db: Database.Database): Hono {
   const app = new Hono();
@@ -176,7 +196,9 @@ export function createObservabilityRoutes(db: Database.Database): Hono {
     const denied = gate(c);
     if (denied) return denied;
 
-    const body = renderMetrics(computeSalonHealths(db));
+    const body =
+      renderMetrics(computeSalonHealths(db)) +
+      renderOutboundDropMetrics(snapshotDrops());
     return c.body(body, 200, {
       "Content-Type": "text/plain; version=0.0.4; charset=utf-8",
     });

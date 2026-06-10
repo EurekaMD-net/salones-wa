@@ -113,4 +113,27 @@ CREATE TABLE IF NOT EXISTS campaigns (
 );
 
 CREATE INDEX IF NOT EXISTS idx_campaigns_sent ON campaigns(salon_id, sent_at);
+
+-- §1.2 outbound rate limiting (anti-ban). Counters are keyed by salon-LOCAL day
+-- (day = YYYY-MM-DD in the salon's TZ). Inert unless RATE_LIMIT_ENABLED=true.
+-- Per-(salon,clienta) UNSOLICITED count — reminders + reactivation only.
+-- Reactive replies are NEVER counted here and never gated.
+CREATE TABLE IF NOT EXISTS outbound_counter (
+  salon_id      TEXT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+  clienta_phone TEXT NOT NULL,
+  day           TEXT NOT NULL,
+  count         INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (salon_id, clienta_phone, day)
+);
+CREATE INDEX IF NOT EXISTS idx_outbound_counter_salon_day ON outbound_counter(salon_id, day);
+
+-- Per-salon daily TOTAL outbound (unsolicited + replies) — the global ceiling.
+-- Replies increment this (visibility + true-volume cap) but are never dropped.
+CREATE TABLE IF NOT EXISTS outbound_salon_daily (
+  salon_id TEXT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+  day      TEXT NOT NULL,
+  total    INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (salon_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_outbound_salon_daily_day ON outbound_salon_daily(day);
 `;

@@ -166,6 +166,48 @@ read receipts off if the salon prefers no blue ticks.
 
 **Where to wire:** new `src/bot/rate-limiter.ts` between `messageHandler.reply()` and `baileys.send()`.
 
+**As-built (2026-06-10) — ✅ shipped, DORMANT behind a flag.** New
+`src/bot/rate-limiter.ts` (pure `decideUnsolicited` + SQLite counters +
+`gateUnsolicited` orchestrator). Two operator decisions shaped it:
+
+- **Reactive replies are NEVER dropped.** Only the 3 unsolicited crons
+  (`remind-24h`, `remind-2h`, `reactivation`) are gated. A reply only
+  _increments_ the per-salon daily total (so the 200 cap reflects true volume);
+  it is never blocked. The reply hot-path calls `recordReplyOutbound`, a no-op
+  while disabled.
+- **Two caps, per salon-LOCAL day:** `RATE_LIMIT_PER_PAIR` (5) unsolicited per
+  (salon, clienta); `RATE_LIMIT_PER_SALON_DAY` (200) total per salon. Counters:
+  `outbound_counter(salon_id, clienta_phone, day, count)` (per-pair unsolicited)
+  - `outbound_salon_daily(salon_id, day, total)` (all outbound). `recordUnsolicited`
+    bumps both; `recordReply` bumps the total only. Decision: pair<5 AND total<200.
+- **Send-before-record** (W6): a dropped reminder is not marked reminded (stays
+  retry-eligible); a dropped reactivation skips campaign/state. A salon-cap drop
+  ends that salon's reactivation run; a pair-cap drop skips the one contact.
+- **Silent drop is never invisible:** `/metrics` exposes
+  `salones_wa_outbound_dropped_total{salon_id,kind,reason}` + a `console.warn`.
+- The reactivation cron's existing in-run `RATE_LIMIT_PER_SALON=20` (batch
+  fairness) is kept — it's orthogonal to the new persisted daily caps.
+- Counters pruned >7 days by the daily `update-dormant` cron.
+
+**Default OFF.** `RATE_LIMIT_ENABLED` unset ⇒ `gateUnsolicited` always sends and
+records nothing (crons unchanged); `SALONES_ENV=test` forces off. 18 unit tests
+(+2 metrics) on a real in-memory SQLite; full suite 469/469; **qa-auditor SHIP**
+(replies-never-dropped + dormant-inert + send-before-record verified). Tables are
+created at the next restart (`CREATE TABLE IF NOT EXISTS`); to enable: set
+`RATE_LIMIT_ENABLED=true` (+ caps) in the systemd `.env` and restart.
+
+| Env var                    | Default               | Meaning                                           |
+| -------------------------- | --------------------- | ------------------------------------------------- |
+| `RATE_LIMIT_ENABLED`       | `false`               | Master switch. `true`/`1` to enable.              |
+| `RATE_LIMIT_PER_PAIR`      | `5`                   | Max unsolicited/day per (salon, clienta).         |
+| `RATE_LIMIT_PER_SALON_DAY` | `200`                 | Max total outbound/day per salon (incl. replies). |
+| `RATE_LIMIT_TZ`            | `America/Mexico_City` | TZ for the per-day counter boundary.              |
+
+_Note:_ scope deviates intentionally from the plan's "wire between reply and
+send" — replies are reactive/unlimited, so the gate lives on the cron paths, not
+the reply path. At the current 1-salon scale the caps never fire; this is
+preventive, for onboarding salones 2–5.
+
 ### 1.3 Opt-out audit + hardening
 
 **Owner:** salones-wa engineering · **Effort:** 0.5 day · **Cost:** $0

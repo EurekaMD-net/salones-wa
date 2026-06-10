@@ -20,6 +20,12 @@ import {
 } from "../db/models.js";
 import { conversationState } from "../bot/conversation-state.js";
 import {
+  loadRateLimitConfig,
+  gateUnsolicited,
+  pruneOldCounters,
+  dayKey,
+} from "../bot/rate-limiter.js";
+import {
   disconnectAlertHours,
   evaluateSalonHealth,
   findStaleSalons,
@@ -49,6 +55,10 @@ export function registerCrons(
   sendMessage: SendMessageFn,
 ): RegisteredJob[] {
   const jobs: RegisteredJob[] = [];
+  // §1.2 outbound rate limiting. Loaded once; gateUnsolicited is a no-op (always
+  // sends, records nothing) while RATE_LIMIT_ENABLED is unset — so the crons
+  // behave exactly as before until the operator enables it.
+  const rlCfg = loadRateLimitConfig();
 
   // ─── remind-24h: every hour at :05 ───────────────────────────────────
   cron.schedule("5 * * * *", async () => {
@@ -72,7 +82,9 @@ export function registerCrons(
 
         const salon = db
           .prepare("SELECT * FROM salons WHERE id = ?")
-          .get(appt.salon_id) as { phone: string } | undefined;
+          .get(appt.salon_id) as
+          | { phone: string; timezone: string }
+          | undefined;
         if (!salon) continue;
 
         const services = getServices(db, appt.salon_id);
@@ -83,8 +95,24 @@ export function registerCrons(
         const { Messages } = await import("../bot/messages.js");
         const text = Messages.reminder24h(contact, appt, service);
 
-        await sendMessage(salon.phone, contact.phone, text);
-        markReminded24h(db, appt.id);
+        const sent = await gateUnsolicited(
+          db,
+          rlCfg,
+          {
+            salonId: appt.salon_id,
+            clientaPhone: contact.phone,
+            kind: "reminder",
+            timeZone: salon.timezone,
+          },
+          () => sendMessage(salon.phone, contact.phone, text),
+          (reason) =>
+            console.warn(
+              `[remind-24h] rate-limited appt ${appt.id} (${reason})`,
+            ),
+        );
+        // Only mark reminded if it actually went out — a dropped reminder stays
+        // eligible so a later run can send it once capacity frees.
+        if (sent) markReminded24h(db, appt.id);
       } catch (err) {
         console.error("[remind-24h] error for appt", appt.id, err);
       }
@@ -114,7 +142,9 @@ export function registerCrons(
 
         const salon = db
           .prepare("SELECT * FROM salons WHERE id = ?")
-          .get(appt.salon_id) as { phone: string } | undefined;
+          .get(appt.salon_id) as
+          | { phone: string; timezone: string }
+          | undefined;
         if (!salon) continue;
 
         const services = getServices(db, appt.salon_id);
@@ -125,8 +155,22 @@ export function registerCrons(
         const { Messages } = await import("../bot/messages.js");
         const text = Messages.reminder2h(contact, appt, service);
 
-        await sendMessage(salon.phone, contact.phone, text);
-        markReminded2h(db, appt.id);
+        const sent = await gateUnsolicited(
+          db,
+          rlCfg,
+          {
+            salonId: appt.salon_id,
+            clientaPhone: contact.phone,
+            kind: "reminder",
+            timeZone: salon.timezone,
+          },
+          () => sendMessage(salon.phone, contact.phone, text),
+          (reason) =>
+            console.warn(
+              `[remind-2h] rate-limited appt ${appt.id} (${reason})`,
+            ),
+        );
+        if (sent) markReminded2h(db, appt.id);
       } catch (err) {
         console.error("[remind-2h] error for appt", appt.id, err);
       }
@@ -151,6 +195,16 @@ export function registerCrons(
     try {
       const count = updateDormantFlags(db);
       console.log(`[update-dormant] ${count} contacts updated`);
+      // §1.2: keep the outbound counters bounded — drop rows >7 days old.
+      // Cutoff uses the default TZ (not per-salon) — fine: it's a 7-day buffer,
+      // so a ±1-day TZ skew never prunes a counter still in use by any cap.
+      const cutoff = dayKey(
+        new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+        rlCfg.defaultTimeZone,
+      );
+      const pruned = pruneOldCounters(db, cutoff);
+      if (pruned > 0)
+        console.log(`[update-dormant] pruned ${pruned} old counter rows`);
     } catch (err) {
       console.error("[update-dormant] error", err);
     }
@@ -162,8 +216,10 @@ export function registerCrons(
     try {
       const salons = db
         .prepare("SELECT * FROM salons WHERE active = 1")
-        .all() as Array<{ id: string; phone: string }>;
-      // W5: Rate limit is per-salon (not global) to ensure fair multi-tenant distribution
+        .all() as Array<{ id: string; phone: string; timezone: string }>;
+      // W5: per-RUN per-salon batch cap for fair multi-tenant distribution.
+      // Distinct from §1.2's persisted DAILY caps (gateUnsolicited below) — this
+      // bounds one campaign run; that bounds total unsolicited per salon-day.
       const RATE_LIMIT_PER_SALON = 20;
       let totalSent = 0;
 
@@ -184,8 +240,31 @@ export function registerCrons(
           const { Messages } = await import("../bot/messages.js");
           const text = Messages.reactivationOutbound(contact);
 
-          // W6: Send BEFORE recording — only record if send succeeded
-          await sendMessage(salon.phone, contact.phone, text);
+          // W6: Send BEFORE recording — only record if send succeeded.
+          // §1.2: gate the unsolicited send. A salon-cap drop ends this salon's
+          // run for the day; a pair-cap drop just skips this contact.
+          let salonCapped = false;
+          const sent = await gateUnsolicited(
+            db,
+            rlCfg,
+            {
+              salonId: salon.id,
+              clientaPhone: contact.phone,
+              kind: "reactivation",
+              timeZone: salon.timezone,
+            },
+            () => sendMessage(salon.phone, contact.phone, text),
+            (reason) => {
+              if (reason === "salon_cap") salonCapped = true;
+              console.warn(
+                `[reactivation] rate-limited contact ${contact.id} (${reason})`,
+              );
+            },
+          );
+          if (!sent) {
+            if (salonCapped) break;
+            continue;
+          }
 
           // Send succeeded — now record campaign + arm state
           const campaign = createCampaign(db, {

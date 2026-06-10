@@ -9,7 +9,13 @@ import { createSalon } from "../src/db/models.js";
 import {
   createObservabilityRoutes,
   renderMetrics,
+  renderOutboundDropMetrics,
 } from "../src/web/observability.js";
+import {
+  recordDrop,
+  snapshotDrops,
+  resetDrops,
+} from "../src/bot/rate-limiter.js";
 import {
   recordSalonState,
   resetSalonConnStates,
@@ -223,5 +229,28 @@ describe("renderMetrics (pure)", () => {
     ]);
     expect(out).toContain("salones_wa_salons_active 2");
     expect(out).toContain("salones_wa_salons_stale 1");
+  });
+});
+
+describe("renderOutboundDropMetrics (§1.2)", () => {
+  beforeEach(() => resetDrops());
+
+  it("renders HELP/TYPE header with zero series when no drops", () => {
+    const out = renderOutboundDropMetrics(snapshotDrops());
+    expect(out).toContain("# TYPE salones_wa_outbound_dropped_total counter");
+    expect(out).not.toContain("salones_wa_outbound_dropped_total{");
+  });
+
+  it("renders a labeled counter line per salon/kind/reason", () => {
+    recordDrop("s1", "reminder", "pair_cap");
+    recordDrop("s1", "reminder", "pair_cap");
+    recordDrop("s2", "reactivation", "salon_cap");
+    const out = renderOutboundDropMetrics(snapshotDrops());
+    expect(out).toContain(
+      'salones_wa_outbound_dropped_total{salon_id="s1",kind="reminder",reason="pair_cap"} 2',
+    );
+    expect(out).toContain(
+      'salones_wa_outbound_dropped_total{salon_id="s2",kind="reactivation",reason="salon_cap"} 1',
+    );
   });
 });

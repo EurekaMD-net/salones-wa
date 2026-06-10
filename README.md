@@ -287,6 +287,12 @@ HUMANIZE_ONLINE_END_HOUR=21          # Hora local en que se pone "no disponible"
 HUMANIZE_PRESENCE_TICK_MS=300000     # Cada cuánto re-evalúa la presencia (default 5 min)
 HUMANIZE_OFFLINE_GAP_CHANCE=0.15     # Prob. de "ausentarse" en un tick dentro de horario (default 0.15)
 HUMANIZE_PRESENCE_TZ=America/Mexico_City  # TZ en que se resuelven las horas (default MX)
+# Límites de envío saliente (anti-ban §1.2 — sólo crons no solicitados; default OFF):
+RATE_LIMIT_ENABLED=false             # Master switch. "true"/"1" lo activa. OFF = los crons envían como hoy.
+RATE_LIMIT_PER_PAIR=5                # Máx. mensajes NO solicitados por (salón, clienta) por día (default 5)
+RATE_LIMIT_PER_SALON_DAY=200         # Máx. salientes totales por salón/día (incluye respuestas; default 200)
+RATE_LIMIT_TZ=America/Mexico_City    # TZ del corte de día para los contadores (default MX)
+# Nota: las respuestas reactivas NUNCA se bloquean; sólo cuentan para el tope por salón.
 ```
 
 > Plan completo de anti-abuso por fases (humanización, proxies residenciales,

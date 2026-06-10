@@ -24,6 +24,7 @@ import {
   type Presence,
   type PresenceConfig,
 } from "./presence.js";
+import { loadRateLimitConfig, recordReplyOutbound } from "./rate-limiter.js";
 
 export interface BaileysInstance {
   salonId: string;
@@ -151,6 +152,7 @@ export async function initBaileysForSalon(
   // operator flips the flag and restarts the service.
   const humanize = loadHumanizeConfig();
   const presence = loadPresenceConfig();
+  const rateLimit = loadRateLimitConfig();
   // Log only when ON, so the default-off path stays silent (no behavior change)
   // and the operator gets positive confirmation the flag parsed during smoke —
   // catches a typo'd HUMANIZE_ENABLED (e.g. "TRUE"/"yes") that fails safe to off.
@@ -408,6 +410,9 @@ export async function initBaileysForSalon(
             },
             humanize,
           );
+          // §1.2: count this reply toward the salon's daily total (no-op while
+          // RATE_LIMIT_ENABLED is off). Reactive replies are never gated/dropped.
+          recordReplyOutbound(options.db, rateLimit, salon.id, salon.timezone);
         }
       } catch (err) {
         const statusCode = (err as InstanceType<typeof Boom>)?.output

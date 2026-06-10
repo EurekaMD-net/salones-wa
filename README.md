@@ -290,9 +290,10 @@ HUMANIZE_PRESENCE_TZ=America/Mexico_City  # TZ en que se resuelven las horas (de
 ```
 
 > Plan completo de anti-abuso por fases (humanización, proxies residenciales,
-> aislamiento de procesos, multi-región): `WA-ANTI-ABUSE-PLAN.md` en el KB
-> (`negocios-auto-gestionados/verticales/salones-belleza/`). §1.1 (humanización)
-> ya está implementada, **inerte hasta que el operador active `HUMANIZE_ENABLED`**.
+> aislamiento de procesos, multi-región): [`docs/WA-ANTI-ABUSE-PLAN.md`](docs/WA-ANTI-ABUSE-PLAN.md)
+> (copia canónica versionada; espejo en el KB de Jarvis). **§1.1 (humanización
+> de respuestas + ciclado de presencia) 🟢 ACTIVA en PROD** desde 2026-06-10
+> (`HUMANIZE_ENABLED=true`). Revertir = poner el flag en `false` y reiniciar.
 
 ---
 

@@ -87,6 +87,85 @@ export function resetSalonConnStates(): void {
   registry.clear();
 }
 
+// ─── Disconnect counter (§1.5) ──────────────────────────────────────────────
+
+/**
+ * In-memory disconnect tally for /metrics, mirroring the §1.2 outbound-drop
+ * counter. Every `connection: "close"` the LIVE socket sees is counted, labeled
+ * by the Baileys DisconnectReason status code + its symbolic name — so the
+ * operator can tell benign churn (515 restartRequired right after a link) from a
+ * real incident (401 loggedOut, 403 forbidden = WA blocked the number/IP).
+ * In-memory by design: like the rest of this registry, mc-prometheus owns
+ * durability via scrape and this resets on process restart.
+ */
+const disconnectCounts = new Map<string, number>();
+
+/**
+ * Symbolic name for a Baileys DisconnectReason status code. Hardcoded — the enum
+ * is a stable protocol-level set — so the metrics layer needn't import the heavy
+ * Baileys bundle. This BOUNDS the `reason` label's cardinality: an unmapped or
+ * absent code collapses to "unknown" rather than leaking the free-text error
+ * message (which would blow up Prometheus label cardinality). Note Baileys
+ * aliases 408 to BOTH connectionLost and timedOut; we canonicalize it to
+ * connectionLost.
+ */
+const DISCONNECT_REASON_NAMES: Readonly<Record<number, string>> = {
+  401: "loggedOut",
+  403: "forbidden",
+  408: "connectionLost", // Baileys: 408 = connectionLost = timedOut (aliased)
+  411: "multideviceMismatch",
+  428: "connectionClosed",
+  440: "connectionReplaced",
+  500: "badSession",
+  503: "unavailableService",
+  515: "restartRequired",
+};
+
+/** Map a DisconnectReason status code to its symbolic name (unmapped/absent ⇒ "unknown"). */
+export function disconnectReasonName(code: number | undefined): string {
+  if (code === undefined) return "unknown";
+  return DISCONNECT_REASON_NAMES[code] ?? "unknown";
+}
+
+/**
+ * Tally one socket disconnect by its DisconnectReason status code. A missing
+ * code (the error carried no Boom status) is bucketed under code="none". The
+ * symbolic reason is derived here so the label set stays bounded; the raw error
+ * message is intentionally NOT used as a label.
+ */
+export function recordDisconnect(
+  salonId: string,
+  code: number | undefined,
+): void {
+  const codeLabel = code === undefined ? "none" : String(code);
+  const key = JSON.stringify([salonId, codeLabel, disconnectReasonName(code)]);
+  disconnectCounts.set(key, (disconnectCounts.get(key) ?? 0) + 1);
+}
+
+export function snapshotDisconnects(): Array<{
+  salonId: string;
+  code: string;
+  reason: string;
+  count: number;
+}> {
+  const out: Array<{
+    salonId: string;
+    code: string;
+    reason: string;
+    count: number;
+  }> = [];
+  for (const [key, count] of disconnectCounts) {
+    const [salonId, code, reason] = JSON.parse(key) as [string, string, string];
+    out.push({ salonId, code, reason, count });
+  }
+  return out;
+}
+
+/** Test helper — clear the disconnect tally between cases. */
+export function resetDisconnects(): void {
+  disconnectCounts.clear();
+}
+
 // ─── Health evaluation (pure) ──────────────────────────────────────────────
 
 export interface SalonHealth {

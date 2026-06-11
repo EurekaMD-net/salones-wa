@@ -254,6 +254,37 @@ cleaned a stray NUL byte in the §1.2 drop-counter key (now `JSON.stringify`)._
 - This is the early-warning system for §2.1 (proxies). When disconnect rate per salon climbs, escalate.
 - Parallels `mission-control` task #230 — same code pattern, different service.
 
+**As-built (2026-06-11) — ✅ shipped, ACTIVE (always-on observability, no flag).**
+New counter `salones_wa_disconnect_total{salon_id, code, reason}` on the existing
+**ADMIN_TOKEN-gated** `/metrics`, instrumented from the `connection:"close"` branch
+of `baileys-manager.ts` (generation-fenced — a superseded zombie socket's late
+close is never counted). `code` is the Baileys `DisconnectReason` status (or
+`"none"` when the error carries no Boom status); `reason` is its **bounded**
+symbolic name via `disconnectReasonName` (515→`restartRequired`, 401→`loggedOut`,
+403→`forbidden`, …; unmapped/absent ⇒ `"unknown"`). 408 is canonicalized to
+`connectionLost` (Baileys aliases 408 = connectionLost = timedOut).
+
+**Two deliberate divergences from the spec, both justified:**
+
+1. **No `disconnects` table.** Counters are **in-memory** (a `Map`, mirroring the
+   §1.2 drop counter + the conn-state registry), resetting on restart. Durability
+   is owned by **mc-prometheus** (it scrapes `/metrics` and applies `for:` /
+   `increase()` over time) — a SQLite table would duplicate that and add write
+   load on the hot disconnect path. The free-text error message is logged (not a
+   label) so the forensic detail still lands in `journalctl`.
+2. **`reason` label added + cardinality bounded.** The spec's free-text `reason`
+   is NOT used as a label (that would blow up Prometheus cardinality); only the
+   9-value symbolic enum reaches the label. Counter name is singular
+   (`…_disconnect_total`) to match the existing `salones_wa_baileys_*` family.
+
+13 unit tests (8 in `baileys-state.test.ts`: reason-map + counter; 5 in
+`observability.test.ts`: render + a `/metrics` integration assertion); suite
+486/486; **qa-auditor SHIP** (all 4 adversarial claims — cardinality,
+generation-fence, 408-alias, reset semantics — verified against source).
+**On disk, NOT yet deployed** — salones-wa is tsx-live, so the counter goes live
+on the next service restart (no separate build step). Wire mc-prometheus's
+disconnect-rate alert (§2.1 trigger: >2% sustained 24h) once scraped.
+
 ### Phase 1 cost summary
 
 | Item                | Cost      |

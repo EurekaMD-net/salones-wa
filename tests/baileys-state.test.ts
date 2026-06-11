@@ -16,6 +16,10 @@ import {
   selectSalonsToReinit,
   planWatchdogTick,
   BAILEYS_STATES,
+  disconnectReasonName,
+  recordDisconnect,
+  snapshotDisconnects,
+  resetDisconnects,
   type SalonConnState,
 } from "../src/bot/baileys-state.js";
 
@@ -484,5 +488,75 @@ describe("planWatchdogTick", () => {
     const res = planWatchdogTick([salon("a")], recs, opts);
     expect(res.reinit).toEqual([]);
     expect(opts.strikes.has("a")).toBe(false);
+  });
+});
+
+describe("disconnectReasonName (§1.5)", () => {
+  it("maps known DisconnectReason codes to symbolic names", () => {
+    expect(disconnectReasonName(401)).toBe("loggedOut");
+    expect(disconnectReasonName(403)).toBe("forbidden");
+    expect(disconnectReasonName(428)).toBe("connectionClosed");
+    expect(disconnectReasonName(440)).toBe("connectionReplaced");
+    expect(disconnectReasonName(515)).toBe("restartRequired");
+  });
+  it("canonicalizes Baileys' aliased 408 to connectionLost", () => {
+    expect(disconnectReasonName(408)).toBe("connectionLost");
+  });
+  it("returns 'unknown' for an unmapped or absent code", () => {
+    expect(disconnectReasonName(418)).toBe("unknown");
+    expect(disconnectReasonName(undefined)).toBe("unknown");
+  });
+});
+
+describe("disconnect counter (§1.5)", () => {
+  beforeEach(() => resetDisconnects());
+
+  it("starts empty", () => {
+    expect(snapshotDisconnects()).toEqual([]);
+  });
+
+  it("tallies by salon + code + derived reason", () => {
+    recordDisconnect("s1", 515);
+    recordDisconnect("s1", 515);
+    recordDisconnect("s2", 401);
+    const snap = snapshotDisconnects();
+    expect(snap).toContainEqual({
+      salonId: "s1",
+      code: "515",
+      reason: "restartRequired",
+      count: 2,
+    });
+    expect(snap).toContainEqual({
+      salonId: "s2",
+      code: "401",
+      reason: "loggedOut",
+      count: 1,
+    });
+  });
+
+  it("buckets a missing code under code='none', reason='unknown'", () => {
+    recordDisconnect("s1", undefined);
+    expect(snapshotDisconnects()).toContainEqual({
+      salonId: "s1",
+      code: "none",
+      reason: "unknown",
+      count: 1,
+    });
+  });
+
+  it("keeps an unmapped numeric code as the label but reason='unknown'", () => {
+    recordDisconnect("s1", 418);
+    expect(snapshotDisconnects()).toContainEqual({
+      salonId: "s1",
+      code: "418",
+      reason: "unknown",
+      count: 1,
+    });
+  });
+
+  it("resetDisconnects clears the tally", () => {
+    recordDisconnect("s1", 515);
+    resetDisconnects();
+    expect(snapshotDisconnects()).toEqual([]);
   });
 });

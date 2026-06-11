@@ -11,7 +11,7 @@ import { join } from "path";
 import type Database from "better-sqlite3";
 import { getSalonByPhone, upsertContact } from "../db/models.js";
 import { handleInboundMessage } from "./message-handler.js";
-import { recordSalonState } from "./baileys-state.js";
+import { recordSalonState, recordDisconnect } from "./baileys-state.js";
 import {
   loadHumanizeConfig,
   humanizedSend,
@@ -309,6 +309,10 @@ export async function initBaileysForSalon(
       stopPresenceCycle(salonId);
       const statusCode = (lastDisconnect?.error as InstanceType<typeof Boom>)
         ?.output?.statusCode;
+      // §1.5: tally every disconnect of the live socket by its DisconnectReason
+      // code for /metrics. Generation-fenced (the handler early-returns for a
+      // superseded socket above), so a zombie's late close is never counted.
+      recordDisconnect(salonId, statusCode);
       const reason = lastDisconnect?.error?.message ?? "unknown";
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
       if (shouldReconnect) {

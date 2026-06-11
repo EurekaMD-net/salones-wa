@@ -109,9 +109,9 @@ salones-wa/
 │   ├── slot-finder.test.ts         # 22 tests  (working-hours + conflicts + alternatives)
 │   ├── datetime-parser.test.ts     # 24 tests  (Spanish day+time parser + audit C1/W2 pins)
 │   ├── date-extract.test.ts        # 18 tests
-│   ├── baileys-state.test.ts       # 40 tests  (liveness watchdog + conn-state registry)
+│   ├── baileys-state.test.ts       # 48 tests  (liveness watchdog + conn-state registry + §1.5 disconnect counter)
 │   ├── baileys-manager.test.ts     # 2 tests   (removeBaileysForSalon teardown)
-│   └── observability.test.ts       # 15 tests  (/health/salons + /metrics)
+│   └── observability.test.ts       # 22 tests  (/health/salons + /metrics + §1.2/§1.5 counters)
 │                                   # (admin.test.ts + panel.test.ts colocados en src/web/)
 ├── docs/
 │   ├── MVP-PLAN.md                 # Plan completo del MVP
@@ -229,15 +229,15 @@ Ver `docs/SCHEMA.md` para el DDL completo.
 
 Auth por token UUID en URL (`?token=<salon-uuid>`). Sin login, sin OAuth — funciona en 3G.
 
-| Ruta                          | Descripción                                                            |
-| ----------------------------- | ---------------------------------------------------------------------- |
-| `GET /health`                 | Health check público (liveness, sin detalle)                           |
-| `GET /panel/dashboard?token=` | Citas de hoy + estadísticas + contactos dormidos                       |
-| `GET /panel/contacts?token=`  | Lista de contactos con filtros                                         |
-| `GET /panel/campaigns?token=` | Historial y métricas de campañas de reactivación                       |
-| `GET /api/stats?token=`       | JSON con métricas del salón                                            |
-| `GET /health/salons?token=`   | Estado Baileys por salón (JSON). **Gated: ADMIN_TOKEN**                |
-| `GET /metrics?token=`         | Exposición Prometheus (`salones_wa_baileys_*`). **Gated: ADMIN_TOKEN** |
+| Ruta                          | Descripción                                                                                                                                            |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /health`                 | Health check público (liveness, sin detalle)                                                                                                           |
+| `GET /panel/dashboard?token=` | Citas de hoy + estadísticas + contactos dormidos                                                                                                       |
+| `GET /panel/contacts?token=`  | Lista de contactos con filtros                                                                                                                         |
+| `GET /panel/campaigns?token=` | Historial y métricas de campañas de reactivación                                                                                                       |
+| `GET /api/stats?token=`       | JSON con métricas del salón                                                                                                                            |
+| `GET /health/salons?token=`   | Estado Baileys por salón (JSON). **Gated: ADMIN_TOKEN**                                                                                                |
+| `GET /metrics?token=`         | Exposición Prometheus (`salones_wa_baileys_*`, `_outbound_dropped_total` §1.2, `_disconnect_total{salon_id,code,reason}` §1.5). **Gated: ADMIN_TOKEN** |
 
 ### Observabilidad (estado de la conexión WhatsApp)
 

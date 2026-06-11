@@ -10,6 +10,7 @@ import {
   createObservabilityRoutes,
   renderMetrics,
   renderOutboundDropMetrics,
+  renderDisconnectMetrics,
 } from "../src/web/observability.js";
 import {
   recordDrop,
@@ -19,6 +20,9 @@ import {
 import {
   recordSalonState,
   resetSalonConnStates,
+  recordDisconnect,
+  snapshotDisconnects,
+  resetDisconnects,
   type SalonHealth,
 } from "../src/bot/baileys-state.js";
 import type Database from "better-sqlite3";
@@ -138,8 +142,21 @@ describe("Observability — /metrics", () => {
 
   beforeEach(() => {
     resetSalonConnStates();
+    resetDisconnects();
     db = initDb(":memory:");
     app = makeApp(db);
+  });
+
+  it("includes the §1.5 disconnect counter (header always, series after a close)", async () => {
+    const s = createSalon(db, { name: "Salón Demo", phone: "525640501088" });
+    recordSalonState(s.id, s.phone, "connected");
+    recordDisconnect(s.id, 515);
+
+    const text = await (await get(app, `/metrics?token=${ADMIN_TOKEN}`)).text();
+    expect(text).toContain("# TYPE salones_wa_disconnect_total counter");
+    expect(text).toContain(
+      `salones_wa_disconnect_total{salon_id="${s.id}",code="515",reason="restartRequired"} 1`,
+    );
   });
 
   it("serves Prometheus text with the enum gauge", async () => {
@@ -251,6 +268,47 @@ describe("renderOutboundDropMetrics (§1.2)", () => {
     );
     expect(out).toContain(
       'salones_wa_outbound_dropped_total{salon_id="s2",kind="reactivation",reason="salon_cap"} 1',
+    );
+  });
+});
+
+describe("renderDisconnectMetrics (§1.5)", () => {
+  beforeEach(() => resetDisconnects());
+
+  it("renders HELP/TYPE header with zero series when no disconnects", () => {
+    const out = renderDisconnectMetrics(snapshotDisconnects());
+    expect(out).toContain("# TYPE salones_wa_disconnect_total counter");
+    expect(out).not.toContain("salones_wa_disconnect_total{");
+  });
+
+  it("renders a labeled counter line per salon/code/reason", () => {
+    recordDisconnect("s1", 515);
+    recordDisconnect("s1", 515);
+    recordDisconnect("s2", 401);
+    const out = renderDisconnectMetrics(snapshotDisconnects());
+    expect(out).toContain(
+      'salones_wa_disconnect_total{salon_id="s1",code="515",reason="restartRequired"} 2',
+    );
+    expect(out).toContain(
+      'salones_wa_disconnect_total{salon_id="s2",code="401",reason="loggedOut"} 1',
+    );
+  });
+
+  it("escapes special characters in the salon_id label", () => {
+    recordDisconnect('a"b\\c', 515);
+    const out = renderDisconnectMetrics(snapshotDisconnects());
+    expect(out).toContain(`salon_id="a\\"b\\\\c"`);
+  });
+
+  it("renders an absent code as code='none' and an unmapped code with reason='unknown'", () => {
+    recordDisconnect("s1", undefined);
+    recordDisconnect("s2", 418);
+    const out = renderDisconnectMetrics(snapshotDisconnects());
+    expect(out).toContain(
+      'salones_wa_disconnect_total{salon_id="s1",code="none",reason="unknown"} 1',
+    );
+    expect(out).toContain(
+      'salones_wa_disconnect_total{salon_id="s2",code="418",reason="unknown"} 1',
     );
   });
 });

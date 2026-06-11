@@ -25,6 +25,7 @@ import {
   evaluateSalonHealth,
   getAllSalonConnStates,
   getBootTime,
+  snapshotDisconnects,
   type SalonHealth,
 } from "../bot/baileys-state.js";
 import { clientIp, createRateLimiter, verifyAdminTokenQuery } from "./auth.js";
@@ -140,6 +141,27 @@ export function renderOutboundDropMetrics(
   return lines.join("\n") + "\n";
 }
 
+/**
+ * Render the in-memory disconnect counter (§1.5) as Prometheus text. Zero series
+ * until the first socket close — just the HELP/TYPE header — so the scrape shape
+ * is stable from boot. `code` is the DisconnectReason status (or "none"); `reason`
+ * is its bounded symbolic name (see disconnectReasonName).
+ */
+export function renderDisconnectMetrics(
+  disconnects: ReturnType<typeof snapshotDisconnects>,
+): string {
+  const lines: string[] = [
+    "# HELP salones_wa_disconnect_total Baileys socket disconnects by DisconnectReason (§1.5).",
+    "# TYPE salones_wa_disconnect_total counter",
+  ];
+  for (const d of disconnects) {
+    lines.push(
+      `salones_wa_disconnect_total{salon_id="${escapeLabel(d.salonId)}",code="${escapeLabel(d.code)}",reason="${escapeLabel(d.reason)}"} ${d.count}`,
+    );
+  }
+  return lines.join("\n") + "\n";
+}
+
 /** Routes mounted at the app root alongside panel + admin. */
 export function createObservabilityRoutes(db: Database.Database): Hono {
   const app = new Hono();
@@ -198,7 +220,8 @@ export function createObservabilityRoutes(db: Database.Database): Hono {
 
     const body =
       renderMetrics(computeSalonHealths(db)) +
-      renderOutboundDropMetrics(snapshotDrops());
+      renderOutboundDropMetrics(snapshotDrops()) +
+      renderDisconnectMetrics(snapshotDisconnects());
     return c.body(body, 200, {
       "Content-Type": "text/plain; version=0.0.4; charset=utf-8",
     });

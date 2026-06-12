@@ -11,6 +11,7 @@ import {
   resetSalonConnStates,
   evaluateSalonHealth,
   findStaleSalons,
+  findSalonsNeedingAlert,
   disconnectAlertHours,
   reconnectStuckMinutes,
   selectSalonsToReinit,
@@ -21,6 +22,7 @@ import {
   snapshotDisconnects,
   resetDisconnects,
   type SalonConnState,
+  type SalonHealth,
 } from "../src/bot/baileys-state.js";
 
 const HOUR = 3_600_000;
@@ -224,6 +226,58 @@ describe("findStaleSalons", () => {
     ];
     const stale = findStaleSalons(healths);
     expect(stale.map((h) => h.salonId)).toEqual(["a"]);
+  });
+});
+
+describe("findSalonsNeedingAlert", () => {
+  const h = (over: Partial<SalonHealth>): SalonHealth => ({
+    salonId: "x",
+    name: "X",
+    phone: "1",
+    active: true,
+    state: "connected",
+    since: null,
+    lastConnectedAt: null,
+    downForSeconds: 1234,
+    stale: false,
+    ...over,
+  });
+
+  it("alerts a logged_out salon even when NOT yet stale (the core fix)", () => {
+    const out = findSalonsNeedingAlert([
+      h({ salonId: "a", state: "logged_out", stale: false }),
+    ]);
+    expect(out.map((s) => s.salonId)).toEqual(["a"]);
+  });
+
+  it("alerts a stale salon that is not logged_out (e.g. stuck reconnecting)", () => {
+    const out = findSalonsNeedingAlert([
+      h({ salonId: "b", state: "reconnecting", stale: true }),
+    ]);
+    expect(out.map((s) => s.salonId)).toEqual(["b"]);
+  });
+
+  it("emits exactly ONE row when a salon is both logged_out AND stale (no OR dup)", () => {
+    const out = findSalonsNeedingAlert([
+      h({ salonId: "g", state: "logged_out", stale: true }), // logged out >24h
+    ]);
+    expect(out.map((s) => s.salonId)).toEqual(["g"]);
+  });
+
+  it("does NOT alert connected, healthy, or transient-unknown salons", () => {
+    const out = findSalonsNeedingAlert([
+      h({ salonId: "c", state: "connected", stale: false }),
+      h({ salonId: "d", state: "reconnecting", stale: false }), // self-heals
+      h({ salonId: "e", state: "unknown", stale: false }), // just booted
+    ]);
+    expect(out).toHaveLength(0);
+  });
+
+  it("excludes inactive salons regardless of state", () => {
+    const out = findSalonsNeedingAlert([
+      h({ salonId: "f", active: false, state: "logged_out", stale: true }),
+    ]);
+    expect(out).toHaveLength(0);
   });
 });
 

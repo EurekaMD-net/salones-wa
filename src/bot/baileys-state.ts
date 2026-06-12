@@ -223,6 +223,20 @@ export function findStaleSalons(healths: SalonHealth[]): SalonHealth[] {
   return healths.filter((h) => h.active && h.stale);
 }
 
+/**
+ * Active salons that warrant a disconnect alert: stale (down past the
+ * threshold) OR in the terminal `logged_out` state. A 401 logout never
+ * self-recovers — it requires a manual re-link — so it must alert immediately
+ * instead of waiting out the staleness window. The other not-connected states
+ * (connecting/reconnecting/unknown) self-heal, so they only alert once stale,
+ * which keeps process restarts from false-alarming on the transient "unknown".
+ */
+export function findSalonsNeedingAlert(healths: SalonHealth[]): SalonHealth[] {
+  return healths.filter(
+    (h) => h.active && (h.stale || h.state === "logged_out"),
+  );
+}
+
 const DEFAULT_ALERT_HOURS = 24;
 
 /**

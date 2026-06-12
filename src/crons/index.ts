@@ -28,7 +28,7 @@ import {
 import {
   disconnectAlertHours,
   evaluateSalonHealth,
-  findStaleSalons,
+  findSalonsNeedingAlert,
   getAllSalonConnStates,
   getBootTime,
 } from "../bot/baileys-state.js";
@@ -334,22 +334,29 @@ export function registerCrons(
           bootMs,
         }),
       );
-      const stale = findStaleSalons(healths);
-      if (stale.length === 0) {
+      const alerting = findSalonsNeedingAlert(healths);
+      if (alerting.length === 0) {
         console.log(
           `[disconnect-watch] all ${salons.length} active salon(s) healthy`,
         );
         return;
       }
-      for (const h of stale) {
+      for (const h of alerting) {
         // NOTE: measured from lastConnectedAt-or-boot, so right after a
         // process restart this UNDER-reports true downtime (counts from boot).
         // It's a human breadcrumb only — mc-prometheus's `for:` clause over
         // the scraped gauge is the source of truth for the actual alert.
         const hrs =
           h.downForSeconds != null ? (h.downForSeconds / 3600).toFixed(1) : "?";
+        // logged_out is terminal (401 → manual re-link), so it alerts the
+        // moment we see it, NOT after the staleness window. Everything else
+        // reaching here is `stale` = down past the threshold.
+        const why =
+          h.state === "logged_out"
+            ? `logged out ~${hrs}h ago — manual re-link required`
+            : `down ~${hrs}h (>${thresholdHours}h threshold)`;
         console.warn(
-          `[disconnect-watch] WARN salon "${h.name}" (${h.phone}) state=${h.state} down ~${hrs}h (>${thresholdHours}h threshold) — mc-prometheus will alert`,
+          `[disconnect-watch] WARN salon "${h.name}" (${h.phone}) state=${h.state} ${why} — mc-prometheus will alert`,
         );
       }
     } catch (err) {

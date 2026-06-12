@@ -160,6 +160,36 @@ sudo systemctl restart salones-wa
 journalctl -u salones-wa -f | grep --line-buffered 'Pairing code'
 ```
 
+### 3.1 — Re-link after a fingerprint sweep ≠ onboarding burn loop (lesson 2026-06-12)
+
+The table above is for **first-time onboarding**, where repeated link failures
+compound into an account flag. A **previously-linked** salon whose device was
+removed by a WhatsApp fingerprint sweep (`device_removed`/stream-401) is a
+DIFFERENT case: the refusal you hit on re-link is usually a **transient
+account-side cool-down** (from the removal + the rapid `requestPairingCode`
+calls), NOT a permanent wall.
+
+2026-06-12, salon `525640501088`: re-link refused twice ("No se pudo vincular el
+dispositivo" / server `401`) — we wrongly concluded a permanent VPS-IP fingerprint
+wall and stopped. ~20 min later a **third** attempt with a fresh code SUCCEEDED —
+same VPS IP, no proxy. The two failures were just the cool-down lapsing.
+
+**Doctrine for a re-link (not onboarding):**
+
+- 2 rapid failures do **not** mean the channel is dead. Stop the rapid burst
+  (each `requestPairingCode` extends the cool-down), **wait ~15–20 min**, then
+  retry ONCE with (a) a **freshly-captured** code — they rotate every ~50s and
+  each new one invalidates the prior, so a code read off an old log line is
+  already stale — and (b) the dueña's phone **pre-staged** on the
+  "Vincular con número de teléfono" code-entry screen BEFORE you generate the
+  code, so it's typed within seconds.
+- A `515 (restart required)` in the log immediately after a successful pair is
+  **normal** (Baileys always emits one, then reconnects to `connected ✅`). Don't
+  mistake it for a failure.
+- Only after a clean, well-timed attempt ALSO fails should you escalate to a
+  longer wait / proxy egress. General rule: **2 failures ≠ architectural
+  impossibility when the hidden variable is time.**
+
 ---
 
 ## Section 4 — Re-link recovery (when an already-linked session dies)
@@ -403,17 +433,26 @@ the public Caddy URL outbound, so that's the scrape path. In
 > (and `check rules` for alerts.yml) — a bad config silently keeps the old one
 > on reload, and crashes the container on restart.
 
-> 🔔 **Notification gap — alerts EVALUATE but don't NOTIFY yet.** There is no
-> Alertmanager and no running Grafana, and `prometheus.yml` has no `alerting:`
-> block — so these rules (like every existing vps-system/mission-control/
-> hindsight rule) fire only into Prometheus' own UI at
-> `http://127.0.0.1:9090/alerts`. To actually page someone, wire ONE of:
-> (a) an Alertmanager container + a receiver (email/Telegram), (b) bring up
-> Grafana (its alerting provisioning already exists under
-> `mission-control/monitoring/grafana/provisioning/alerting/`) + a contact
-> point, or (c) a small mc-side poller of `GET :9090/api/v1/alerts` that pushes
-> firing alerts through Jarvis's existing WhatsApp/Telegram channels. Each needs
-> a channel + credentials — an operator decision, tracked as the open follow-up.
+> 🔔 **Notification delivery — WIRED (option c), as-built.** The gap is closed by
+> the mc-side poller `prometheus-alert-notifier`
+> (`mission-control/src/rituals/prometheus-alert-poller.ts`, git `882ef3a`, ritual
+> `*/2 min`, gated by `ALERT_NOTIFY_ENABLED=true`): it GETs `:9090/api/v1/alerts`
+> and pushes firing + resolved alerts through Jarvis's owner WhatsApp/Telegram
+> (`router.sendBriefingToOwner`; throws on zero-delivery so an unconfigured channel
+> can't silently swallow an alert). No Alertmanager/Grafana needed.
+>
+> **Audited 2026-06-12 (the 525640501088 logout):** the chain WORKED — the poller
+> notified the operator ~1h after the logout (the `for:1h` `SalonWhatsAppLoggedOut`
+> rule). What failed was human-scale: a single 23:00-MX ping, and the original
+> **notify-once** semantics never repeated it, so a missed late-night alert became
+> a ~26h silent outage. **Fixed `c169e8d`: re-alert cadence** — a still-firing
+> CRITICAL re-announces every `ALERT_RENOTIFY_HOURS` (default 6h; `0` disables);
+> warnings stay notify-once. mc runs `dist/`, so live only after
+> `cd /root/claude/mission-control && ./scripts/deploy.sh`.
+>
+> **Open verify:** confirm WHICH owner channel actually delivers — if it's a
+> logged-out WhatsApp-owner JID, only Telegram lands, so make sure the operator
+> watches that one.
 
 ---
 

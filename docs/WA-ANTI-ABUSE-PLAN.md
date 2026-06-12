@@ -3,7 +3,7 @@
 **Created:** 2026-05-24
 **Owner:** salones-wa engineering + operator
 **Scope:** Preemptive mitigations to keep Baileys-based salones-wa alive as the business scales from pilot (1-5) to multi-vertical (500+).
-**Constraint:** WA Business API path is explicitly off the table at low-end pricing (kills unit economics at MXN $500-800/mo per salon).
+**Constraint:** WA Business API path is explicitly off the table at low-end pricing (kills unit economics at MXN $500-800/mo per salon). **Reaffirmed firmly by operator 2026-06-12** ("no way we move to Meta's cloud — that kills the business. Period.") when it was floated as a recovery option for the product-bot logout. Treat Cloud API as **ruled out** for the Standard tier; the residential/mobile-proxy route (Phase 2) is the recovery + hardening path. The §3.5 high-volume Pro-tier idea is on ice pending an explicit operator reopen.
 
 ---
 
@@ -455,6 +455,8 @@ Build on Phase 1.5 disconnect metrics:
 - Build a stack-agnostic message layer in salones-wa so per-salon choice is config, not code.
 
 **Note:** This contradicts the original "no WA Business API" constraint — but at 500+ scale and for the **top 10% of salones**, the math works. Standard salones stay on Baileys.
+
+> ⚠️ **On ice (operator, 2026-06-12).** The operator ruled out Meta Cloud API in absolute terms ("kills the business. Period.") during the product-bot recovery. Do **not** advance this hybrid tier — or propose Cloud API as a recovery path — without the operator explicitly reopening it. It survives here only as a documented 500+-scale option, not an active plan.
 
 ### Phase 3 cost summary
 

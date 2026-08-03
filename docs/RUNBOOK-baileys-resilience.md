@@ -236,6 +236,13 @@ ls -la /root/claude/projects/salones-wa/data/sessions/${SALON_ID}/
 | Session files corrupted (truncated JSON, etc.)           | Wipe + re-link (Section 5).                                                      |
 | Service itself is down (systemctl inactive)              | `systemctl status salones-wa` for the systemd error. Likely a non-Baileys issue. |
 
+> **Outage ONSET: read it from Prometheus, never from the process.** The
+> in-memory registry's `since`/`lastConnectedAt` (and disconnect-watch's
+> "logged out ~Nh ago") reset on every service restart. After the 2026-07-29
+> host boot they re-dated a Jul-19 logout to Jul-29, under-reporting a 2-week
+> outage as 4.6 days (caught 2026-08-02). The true flip time survives in
+> mc-prometheus: `salones_wa_baileys_connected` range query on :9090.
+
 ---
 
 ## Section 5 — Re-linking a previously-linked salon

@@ -9,7 +9,7 @@
 
 | Métrica           | Valor                                                            |
 | ----------------- | ---------------------------------------------------------------- |
-| **Fase**          | **En producción** — Salón Demo en vivo (525640501088)            |
+| **Fase**          | **En producción, sin salones activos** — Salón Demo (525640501088) `active=0` desde 2026-09-19: sesión WA `logged_out` desde 09-04; reactivar = re-link (RUNBOOK §5) + `UPDATE salons SET active=1` |
 | **Tests**         | **420 / 420 ✅**                                                 |
 | **Typecheck**     | 0 errores                                                        |
 | **Último commit** | 2026-06-08                                                       |
